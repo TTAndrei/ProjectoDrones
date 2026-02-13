@@ -13,7 +13,7 @@ ventana.columnconfigure(0, weight=1)
 
 # ----- Conectar / Armar -----
 connectBtn = tk.Button(ventana, text="Conectar", bg="dark orange",
-                       command=lambda: dron.connect('udp:127.0.0.1:14550', 57600)) #dron.connect('udp:127.0.0.1:14550', 57600)dron.connect('tcp:127.0.0.1:5763', 115200)
+                       command=lambda: dron.connect('tcp:127.0.0.1:5763', 115200)) # dron.connect('udp:127.0.0.1:14550', 57600) dron.connect('udp:127.0.0.1:14550', 57600)dron.connect('tcp:127.0.0.1:5763', 115200)
 connectBtn.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
 
 armBtn = tk.Button(ventana, text="Armar", bg="orange",
