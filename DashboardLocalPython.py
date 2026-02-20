@@ -8,11 +8,12 @@ from dronLink.Dron import Dron
 
 
 def showTelemetryInfo (telemetry_info):
-    global heading, altitude, groundSpeed, state
-    global altShowLbl, headingShowLbl, stateShowLbl
+    global heading, altitude, groundSpeed, state, speed
+    global altShowLbl, headingShowLbl, stateShowLbl, speedShowlbl
     altShowLbl['text'] = round (telemetry_info['alt'],2)
     headingShowLbl['text'] =  round(telemetry_info['heading'],2)
     stateShowLbl['text'] = telemetry_info['state']
+    speedShowlbl['text'] = round(telemetry_info['groundSpeed'],2)
 
 
 def connect ():
@@ -45,7 +46,7 @@ def takeoff ():
     global dron
     # despegamos a una altura de 5 metros
     # llamada no bloqueante. Cuando alcance la altura indicada ejecutará la función inTheAir
-    dron.takeOff (5, blocking = False,  callback = inTheAir)
+    dron.takeOff (10, blocking = False,  callback = inTheAir)
     takeOffBtn['text'] = 'Despegando...'
     takeOffBtn['fg'] = 'black'
     takeOffBtn['bg'] = 'yellow'
@@ -53,7 +54,7 @@ def takeoff ():
 def land ():
     global dron
     # llamada bloqueante
-    dron.Land()
+    dron.Land(blocking = False)
     landBtn['text'] = 'En tierra'
     landBtn['fg'] = 'white'
     landBtn['bg'] = 'green'
@@ -61,7 +62,7 @@ def land ():
 def RTL():
     global dron
     # llamada bloqueante
-    dron.RTL()
+    dron.RTL(blocking = False)
     RTLBtn['text'] = 'En tierra'
     RTLBtn['fg'] = 'white'
     RTLBtn['bg'] = 'green'
@@ -107,7 +108,7 @@ def changeNavSpeed (event):
 
 def crear_ventana():
     global dron
-    global  altShowLbl, headingShowLbl,  speedSldr, gradesSldr, stateShowLbl
+    global  altShowLbl, headingShowLbl,  speedSldr, gradesSldr, stateShowLbl, speedShowlbl
     global connectBtn, armBtn, takeOffBtn, landBtn, RTLBtn
     global previousBtn # aqui guardaré el ultimo boton de navegación clicado
 
@@ -232,6 +233,7 @@ def crear_ventana():
     telemetryFrame.columnconfigure(0, weight=1)
     telemetryFrame.columnconfigure(1, weight=1)
     telemetryFrame.columnconfigure(2, weight=1)
+    telemetryFrame.columnconfigure(3, weight=1)
 
     # etiquetas informativas
     altLbl = tk.Label(telemetryFrame, text='Altitud')
@@ -240,8 +242,11 @@ def crear_ventana():
     headingLbl = tk.Label(telemetryFrame, text='Heading')
     headingLbl.grid(row=0, column=1,  padx=5, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
 
-    stateLbl = tk.Label(telemetryFrame, text='Estado')
+    stateLbl = tk.Label(telemetryFrame, text='State')
     stateLbl.grid(row=0, column=2,  padx=5, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
+
+    speedLbl = tk.Label(telemetryFrame, text='Speed')
+    speedLbl.grid(row=0, column=3,  padx=5, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
 
     # etiquetas para colocar aqui los datos cuando se reciben
     altShowLbl = tk.Label(telemetryFrame, text='')
@@ -252,6 +257,9 @@ def crear_ventana():
 
     stateShowLbl = tk.Label(telemetryFrame, text='', )
     stateShowLbl.grid(row=1, column=2, padx=5, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
+
+    speedShowlbl = tk.Label(telemetryFrame, text='', )
+    speedShowlbl.grid(row=1, column=3, padx=5, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
 
     return ventana
 
