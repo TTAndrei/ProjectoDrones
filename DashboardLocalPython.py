@@ -173,7 +173,7 @@ def crear_ventana():
                         command= lambda: go("NorthWest", NWBtn))
     NWBtn.grid(row=0, column=0, padx=2, pady=2, sticky=tk.N + tk.S + tk.E + tk.W)
 
-    NoBtn = tk.Button(navFrame, text="No", bg="dark orange",
+    NoBtn = tk.Button(navFrame, text="N", bg="dark orange",
                         command= lambda: go("North", NoBtn))
     NoBtn.grid(row=0, column=1, padx=2, pady=2, sticky=tk.N + tk.S + tk.E + tk.W)
 
@@ -181,7 +181,7 @@ def crear_ventana():
                         command= lambda: go("NorthEast", NEBtn))
     NEBtn.grid(row=0, column=2, padx=2, pady=2, sticky=tk.N + tk.S + tk.E + tk.W)
 
-    WeBtn = tk.Button(navFrame, text="We", bg="dark orange",
+    WeBtn = tk.Button(navFrame, text="W", bg="dark orange",
                         command=lambda: go("West", WeBtn))
     WeBtn.grid(row=1, column=0, padx=2, pady=2, sticky=tk.N + tk.S + tk.E + tk.W)
 
@@ -189,17 +189,16 @@ def crear_ventana():
                         command=lambda: go("Stop", StopBtn))
     StopBtn.grid(row=1, column=1, padx=2, pady=2, sticky=tk.N + tk.S + tk.E + tk.W)
 
-    EaBtn = tk.Button(navFrame, text="Ea", bg="dark orange",
+    EaBtn = tk.Button(navFrame, text="E", bg="dark orange",
                         command=lambda: go("East", EaBtn))
     EaBtn.grid(row=1, column=2, padx=2, pady=2, sticky=tk.N + tk.S + tk.E + tk.W)
-
 
     SWBtn = tk.Button(navFrame, text="SW", bg="dark orange",
                         #command=lambda: go("SouthWest", SWBtn))
                         command = lambda: go("Down", SWBtn))
     SWBtn.grid(row=2, column=0, padx=2, pady=2, sticky=tk.N + tk.S + tk.E + tk.W)
 
-    SoBtn = tk.Button(navFrame, text="So", bg="dark orange",
+    SoBtn = tk.Button(navFrame, text="S", bg="dark orange",
                         command=lambda: go("South", SoBtn))
     SoBtn.grid(row=2, column=1, padx=2, pady=2, sticky=tk.N + tk.S + tk.E + tk.W)
 
