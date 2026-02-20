@@ -217,7 +217,7 @@ namespace Formulario
         private void altitudebar_MouseUp(object sender, MouseEventArgs e)
         {
             int valorSeleccionado = altitudebar.Value;
-            dron.Despegar(valorSeleccionado);
+            dron.Despegar(valorSeleccionado, bloquear: false, EnAire, "Volando");
         }
     }
 }

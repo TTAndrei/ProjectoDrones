@@ -474,6 +474,7 @@
             this.altitudebar.Size = new System.Drawing.Size(181, 45);
             this.altitudebar.TabIndex = 40;
             this.altitudebar.Scroll += new System.EventHandler(this.altitudebar_Scroll);
+            this.altitudebar.MouseUp += new System.Windows.Forms.MouseEventHandler(this.altitudebar_MouseUp);
             // 
             // Form1
             // 
