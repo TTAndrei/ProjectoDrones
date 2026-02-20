@@ -11,3 +11,10 @@ D:\Julio2018\Docencia\PDD\Proyecto2025\repo\DashboardLocalCsharp\Dashboard\Formu
 D:\Julio2018\Docencia\PDD\Proyecto2025\repo\DashboardLocalCsharp\Dashboard\Formulario\obj\Debug\Formulario.exe
 D:\Julio2018\Docencia\PDD\Proyecto2025\repo\DashboardLocalCsharp\Dashboard\Formulario\obj\Debug\Formulario.pdb
 D:\Julio2018\Docencia\PDD\Proyecto2025\repo\DashboardLocalCsharp\Dashboard\Formulario\obj\Debug\Formulario.exe.config
+C:\Users\arnau\source\repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\obj\Debug\Formulario.csproj.AssemblyReference.cache
+C:\Users\arnau\source\repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\obj\Debug\Formulario.Form1.resources
+C:\Users\arnau\source\repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\obj\Debug\Formulario.Properties.Resources.resources
+C:\Users\arnau\source\repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\obj\Debug\Formulario.csproj.GenerateResource.cache
+C:\Users\arnau\source\repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\obj\Debug\Formulario.csproj.CoreCompileInputs.cache
+C:\Users\arnau\source\repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\obj\Debug\Formulario.exe
+C:\Users\arnau\source\repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\obj\Debug\Formulario.pdb

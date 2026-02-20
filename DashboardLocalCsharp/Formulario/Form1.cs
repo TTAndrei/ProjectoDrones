@@ -214,7 +214,7 @@ namespace Formulario
             alturaBox.Text = n.ToString();
         }
 
-        private void velocidadTrackBar_MouseUp(object sender, MouseEventArgs e)
+        private void altitudebar_MouseUp(object sender, MouseEventArgs e)
         {
             int valorSeleccionado = altitudebar.Value;
             dron.Despegar(valorSeleccionado);
