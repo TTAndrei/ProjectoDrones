@@ -104,12 +104,28 @@ def changeNavSpeed (event):
     # cambiamos la velocidad de navagación según se haya seleccionado en el slider
     dron.changeNavSpeed(float (speedSldr.get()))
 
+def changeAlt():
+    global dron
+    valor = tb.get()
+
+    try:
+        numero = int(valor)  # convertir a entero
+        print("Número ingresado:", numero)
+        dron.change_altitude(altitude=numero, blocking=False)
+    except ValueError:
+        print("Por favor ingresa un número válido")
+
+
+def mantener_altura(altura):
+    global dron, ventana
+    dron.change_altitude(altura, blocking=False)
+    ventana.after(500, lambda: mantener_altura(altura))  # cada 0.5 s
 
 
 def crear_ventana():
     global dron
     global  altShowLbl, headingShowLbl,  speedSldr, gradesSldr, stateShowLbl, speedShowlbl
-    global connectBtn, armBtn, takeOffBtn, landBtn, RTLBtn, AltBtn
+    global connectBtn, armBtn, takeOffBtn, landBtn, RTLBtn, AltBtn, tb
     global previousBtn # aqui guardaré el ultimo boton de navegación clicado
 
     dron = Dron()
@@ -155,7 +171,10 @@ def crear_ventana():
     RTLBtn = tk.Button(ventana, text="RTL", bg="dark orange", command=RTL)
     RTLBtn.grid(row=4, column=1, padx=5, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
 
-    AltBtn = tk.Button(ventana, text="Apply altitude change", bg="dark orange", command=RTL) #aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    tb=tk.Entry(ventana)
+    tb.grid(row=5, column=0, padx=5, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
+
+    AltBtn = tk.Button(ventana, text="Apply altitude change", bg="dark orange", command=changeAlt) #aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     AltBtn.grid(row=5, column=1, padx=5, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
 
     # este es el frame para la navegación. Pequeña matriz de 3 x 3 botones
