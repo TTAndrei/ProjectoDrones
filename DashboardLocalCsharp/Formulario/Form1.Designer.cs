@@ -64,11 +64,13 @@
             this.despegarBtn = new System.Windows.Forms.Button();
             this.button6 = new System.Windows.Forms.Button();
             this.menuStrip1 = new System.Windows.Forms.MenuStrip();
+            this.altitudebar = new System.Windows.Forms.TrackBar();
             ((System.ComponentModel.ISupportInitialize)(this.headingTrackBar)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.velocidadTrackBar)).BeginInit();
             this.groupBox4.SuspendLayout();
             this.groupBox2.SuspendLayout();
             this.groupBox1.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)(this.altitudebar)).BeginInit();
             this.SuspendLayout();
             // 
             // label4
@@ -255,7 +257,7 @@
             this.groupBox2.Controls.Add(this.button10);
             this.groupBox2.Controls.Add(this.button9);
             this.groupBox2.Font = new System.Drawing.Font("Microsoft Sans Serif", 15.75F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.groupBox2.Location = new System.Drawing.Point(15, 213);
+            this.groupBox2.Location = new System.Drawing.Point(15, 290);
             this.groupBox2.Name = "groupBox2";
             this.groupBox2.Size = new System.Drawing.Size(221, 225);
             this.groupBox2.TabIndex = 32;
@@ -374,6 +376,7 @@
             // groupBox1
             // 
             this.groupBox1.BackgroundImageLayout = System.Windows.Forms.ImageLayout.Stretch;
+            this.groupBox1.Controls.Add(this.altitudebar);
             this.groupBox1.Controls.Add(this.label1);
             this.groupBox1.Controls.Add(this.alturaBox);
             this.groupBox1.Controls.Add(this.but_connect);
@@ -383,7 +386,7 @@
             this.groupBox1.Font = new System.Drawing.Font("Microsoft Sans Serif", 15.75F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.groupBox1.Location = new System.Drawing.Point(15, 41);
             this.groupBox1.Name = "groupBox1";
-            this.groupBox1.Size = new System.Drawing.Size(221, 166);
+            this.groupBox1.Size = new System.Drawing.Size(221, 208);
             this.groupBox1.TabIndex = 31;
             this.groupBox1.TabStop = false;
             this.groupBox1.Text = "Control";
@@ -421,7 +424,7 @@
             // 
             this.button7.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(255)))), ((int)(((byte)(192)))), ((int)(((byte)(128)))));
             this.button7.Font = new System.Drawing.Font("Microsoft Sans Serif", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.button7.Location = new System.Drawing.Point(6, 119);
+            this.button7.Location = new System.Drawing.Point(6, 163);
             this.button7.Name = "button7";
             this.button7.Size = new System.Drawing.Size(98, 31);
             this.button7.TabIndex = 13;
@@ -445,7 +448,7 @@
             // 
             this.button6.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(255)))), ((int)(((byte)(192)))), ((int)(((byte)(128)))));
             this.button6.Font = new System.Drawing.Font("Microsoft Sans Serif", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.button6.Location = new System.Drawing.Point(110, 119);
+            this.button6.Location = new System.Drawing.Point(110, 163);
             this.button6.Name = "button6";
             this.button6.Size = new System.Drawing.Size(99, 31);
             this.button6.TabIndex = 10;
@@ -463,11 +466,20 @@
             this.menuStrip1.TabIndex = 33;
             this.menuStrip1.Text = "menuStrip1";
             // 
+            // altitudebar
+            // 
+            this.altitudebar.Location = new System.Drawing.Point(11, 107);
+            this.altitudebar.Maximum = 100;
+            this.altitudebar.Name = "altitudebar";
+            this.altitudebar.Size = new System.Drawing.Size(181, 45);
+            this.altitudebar.TabIndex = 40;
+            this.altitudebar.Scroll += new System.EventHandler(this.altitudebar_Scroll);
+            // 
             // Form1
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(553, 453);
+            this.ClientSize = new System.Drawing.Size(553, 527);
             this.Controls.Add(this.label4);
             this.Controls.Add(this.headingTrackBar);
             this.Controls.Add(this.headingLbl);
@@ -489,6 +501,7 @@
             this.groupBox2.PerformLayout();
             this.groupBox1.ResumeLayout(false);
             this.groupBox1.PerformLayout();
+            ((System.ComponentModel.ISupportInitialize)(this.altitudebar)).EndInit();
             this.ResumeLayout(false);
             this.PerformLayout();
 
@@ -532,6 +545,7 @@
         private System.Windows.Forms.Button despegarBtn;
         private System.Windows.Forms.Button button6;
         private System.Windows.Forms.MenuStrip menuStrip1;
+        private System.Windows.Forms.TrackBar altitudebar;
     }
 }
 
