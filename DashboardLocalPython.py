@@ -109,7 +109,7 @@ def changeNavSpeed (event):
 def crear_ventana():
     global dron
     global  altShowLbl, headingShowLbl,  speedSldr, gradesSldr, stateShowLbl, speedShowlbl
-    global connectBtn, armBtn, takeOffBtn, landBtn, RTLBtn
+    global connectBtn, armBtn, takeOffBtn, landBtn, RTLBtn, AltBtn
     global previousBtn # aqui guardaré el ultimo boton de navegación clicado
 
     dron = Dron()
@@ -155,10 +155,13 @@ def crear_ventana():
     RTLBtn = tk.Button(ventana, text="RTL", bg="dark orange", command=RTL)
     RTLBtn.grid(row=4, column=1, padx=5, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
 
+    AltBtn = tk.Button(ventana, text="Apply altitude change", bg="dark orange", command=RTL) #aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    AltBtn.grid(row=5, column=1, padx=5, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
+
     # este es el frame para la navegación. Pequeña matriz de 3 x 3 botones
     # con el valor de padx hacemos que se introduzca un espacio en blanco a la derecha,
     navFrame = tk.LabelFrame (ventana, text = "Navegación")
-    navFrame.grid(row=5, column=0, columnspan = 2, padx=50, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
+    navFrame.grid(row=6, column=0, columnspan = 2, padx=50, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
 
     navFrame.rowconfigure(0, weight=1)
     navFrame.rowconfigure(1, weight=1)
@@ -185,7 +188,7 @@ def crear_ventana():
                         command=lambda: go("West", WeBtn))
     WeBtn.grid(row=1, column=0, padx=2, pady=2, sticky=tk.N + tk.S + tk.E + tk.W)
 
-    StopBtn = tk.Button(navFrame, text="St", bg="dark orange",
+    StopBtn = tk.Button(navFrame, text="Stop", bg="dark orange",
                         command=lambda: go("Stop", StopBtn))
     StopBtn.grid(row=1, column=1, padx=2, pady=2, sticky=tk.N + tk.S + tk.E + tk.W)
 
@@ -211,20 +214,20 @@ def crear_ventana():
     # slider para elegir la velocidad de navegación
     speedSldr = tk.Scale(ventana, label="Velocidad (m/s):", resolution=1, from_=0, to=20, tickinterval=5,
                           orient=tk.HORIZONTAL)
-    speedSldr.grid(row=6, column=0, columnspan=2, padx=5, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
+    speedSldr.grid(row=7, column=0, columnspan=2, padx=5, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
     speedSldr.bind("<ButtonRelease-1>", changeNavSpeed)
 
     # botones para pedir/parar datos de telemetría
     StartTelemBtn = tk.Button(ventana, text="Empezar a enviar telemetría", bg="dark orange", command=startTelem)
-    StartTelemBtn.grid(row=7, column=0, padx=5, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
+    StartTelemBtn.grid(row=8, column=0, padx=5, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
 
     StopTelemBtn = tk.Button(ventana, text="Parar de enviar telemetría", bg="dark orange", command=stopTelem)
-    StopTelemBtn.grid(row=7, column=1, padx=5, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
+    StopTelemBtn.grid(row=8, column=1, padx=5, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
 
     # Este es el frame para mostrar los datos de telemetría
     # Contiene etiquetas para informar de qué datos son y los valores. Solo nos interesan 3 datos de telemetría
     telemetryFrame = tk.LabelFrame(ventana, text="Telemetría")
-    telemetryFrame.grid(row=8, column=0, columnspan=2, padx=10, pady=10, sticky=tk.N + tk.S + tk.E + tk.W)
+    telemetryFrame.grid(row=9, column=0, columnspan=2, padx=10, pady=10, sticky=tk.N + tk.S + tk.E + tk.W)
 
     telemetryFrame.rowconfigure(0, weight=1)
     telemetryFrame.rowconfigure(1, weight=1)
