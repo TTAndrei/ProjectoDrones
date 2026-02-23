@@ -57,6 +57,7 @@
             this.button10 = new System.Windows.Forms.Button();
             this.button9 = new System.Windows.Forms.Button();
             this.groupBox1 = new System.Windows.Forms.GroupBox();
+            this.altitudebar = new System.Windows.Forms.TrackBar();
             this.label1 = new System.Windows.Forms.Label();
             this.alturaBox = new System.Windows.Forms.TextBox();
             this.but_connect = new System.Windows.Forms.Button();
@@ -64,7 +65,13 @@
             this.despegarBtn = new System.Windows.Forms.Button();
             this.button6 = new System.Windows.Forms.Button();
             this.menuStrip1 = new System.Windows.Forms.MenuStrip();
-            this.altitudebar = new System.Windows.Forms.TrackBar();
+            this.ir_al_punto = new System.Windows.Forms.Button();
+            this.LatBox = new System.Windows.Forms.TextBox();
+            this.LonBox = new System.Windows.Forms.TextBox();
+            this.altitudeBox = new System.Windows.Forms.TextBox();
+            this.label8 = new System.Windows.Forms.Label();
+            this.label10 = new System.Windows.Forms.Label();
+            this.label11 = new System.Windows.Forms.Label();
             ((System.ComponentModel.ISupportInitialize)(this.headingTrackBar)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.velocidadTrackBar)).BeginInit();
             this.groupBox4.SuspendLayout();
@@ -151,7 +158,7 @@
             this.groupBox4.Font = new System.Drawing.Font("Microsoft Sans Serif", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.groupBox4.Location = new System.Drawing.Point(250, 229);
             this.groupBox4.Name = "groupBox4";
-            this.groupBox4.Size = new System.Drawing.Size(277, 172);
+            this.groupBox4.Size = new System.Drawing.Size(277, 208);
             this.groupBox4.TabIndex = 30;
             this.groupBox4.TabStop = false;
             this.groupBox4.Text = "Telemetría";
@@ -246,6 +253,12 @@
             // 
             // groupBox2
             // 
+            this.groupBox2.Controls.Add(this.label11);
+            this.groupBox2.Controls.Add(this.label10);
+            this.groupBox2.Controls.Add(this.label8);
+            this.groupBox2.Controls.Add(this.altitudeBox);
+            this.groupBox2.Controls.Add(this.LonBox);
+            this.groupBox2.Controls.Add(this.LatBox);
             this.groupBox2.Controls.Add(this.label6);
             this.groupBox2.Controls.Add(this.button17);
             this.groupBox2.Controls.Add(this.button16);
@@ -257,9 +270,9 @@
             this.groupBox2.Controls.Add(this.button10);
             this.groupBox2.Controls.Add(this.button9);
             this.groupBox2.Font = new System.Drawing.Font("Microsoft Sans Serif", 15.75F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.groupBox2.Location = new System.Drawing.Point(15, 290);
+            this.groupBox2.Location = new System.Drawing.Point(15, 255);
             this.groupBox2.Name = "groupBox2";
-            this.groupBox2.Size = new System.Drawing.Size(221, 225);
+            this.groupBox2.Size = new System.Drawing.Size(221, 260);
             this.groupBox2.TabIndex = 32;
             this.groupBox2.TabStop = false;
             this.groupBox2.Text = "Movimiento";
@@ -391,6 +404,16 @@
             this.groupBox1.TabStop = false;
             this.groupBox1.Text = "Control";
             // 
+            // altitudebar
+            // 
+            this.altitudebar.Location = new System.Drawing.Point(11, 107);
+            this.altitudebar.Maximum = 100;
+            this.altitudebar.Name = "altitudebar";
+            this.altitudebar.Size = new System.Drawing.Size(181, 45);
+            this.altitudebar.TabIndex = 40;
+            this.altitudebar.Scroll += new System.EventHandler(this.altitudebar_Scroll);
+            this.altitudebar.MouseUp += new System.Windows.Forms.MouseEventHandler(this.altitudebar_MouseUp);
+            // 
             // label1
             // 
             this.label1.AutoSize = true;
@@ -466,21 +489,75 @@
             this.menuStrip1.TabIndex = 33;
             this.menuStrip1.Text = "menuStrip1";
             // 
-            // altitudebar
+            // ir_al_punto
             // 
-            this.altitudebar.Location = new System.Drawing.Point(11, 107);
-            this.altitudebar.Maximum = 100;
-            this.altitudebar.Name = "altitudebar";
-            this.altitudebar.Size = new System.Drawing.Size(181, 45);
-            this.altitudebar.TabIndex = 40;
-            this.altitudebar.Scroll += new System.EventHandler(this.altitudebar_Scroll);
-            this.altitudebar.MouseUp += new System.Windows.Forms.MouseEventHandler(this.altitudebar_MouseUp);
+            this.ir_al_punto.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(255)))), ((int)(((byte)(192)))), ((int)(((byte)(128)))));
+            this.ir_al_punto.Font = new System.Drawing.Font("Microsoft Sans Serif", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.ir_al_punto.Location = new System.Drawing.Point(242, 484);
+            this.ir_al_punto.Name = "ir_al_punto";
+            this.ir_al_punto.Size = new System.Drawing.Size(98, 31);
+            this.ir_al_punto.TabIndex = 40;
+            this.ir_al_punto.Text = "ir al punto";
+            this.ir_al_punto.UseVisualStyleBackColor = false;
+            this.ir_al_punto.Click += new System.EventHandler(this.ir_al_punto_Click);
+            // 
+            // LatBox
+            // 
+            this.LatBox.Location = new System.Drawing.Point(17, 229);
+            this.LatBox.Name = "LatBox";
+            this.LatBox.Size = new System.Drawing.Size(55, 31);
+            this.LatBox.TabIndex = 41;
+            // 
+            // LonBox
+            // 
+            this.LonBox.Location = new System.Drawing.Point(76, 229);
+            this.LonBox.Name = "LonBox";
+            this.LonBox.Size = new System.Drawing.Size(55, 31);
+            this.LonBox.TabIndex = 41;
+            // 
+            // altitudeBox
+            // 
+            this.altitudeBox.Location = new System.Drawing.Point(137, 229);
+            this.altitudeBox.Name = "altitudeBox";
+            this.altitudeBox.Size = new System.Drawing.Size(55, 31);
+            this.altitudeBox.TabIndex = 41;
+            // 
+            // label8
+            // 
+            this.label8.AutoSize = true;
+            this.label8.Font = new System.Drawing.Font("Microsoft Sans Serif", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.label8.Location = new System.Drawing.Point(28, 206);
+            this.label8.Name = "label8";
+            this.label8.Size = new System.Drawing.Size(32, 20);
+            this.label8.TabIndex = 41;
+            this.label8.Text = "Lat";
+            // 
+            // label10
+            // 
+            this.label10.AutoSize = true;
+            this.label10.Font = new System.Drawing.Font("Microsoft Sans Serif", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.label10.Location = new System.Drawing.Point(87, 206);
+            this.label10.Name = "label10";
+            this.label10.Size = new System.Drawing.Size(36, 20);
+            this.label10.TabIndex = 41;
+            this.label10.Text = "Lon";
+            // 
+            // label11
+            // 
+            this.label11.AutoSize = true;
+            this.label11.Font = new System.Drawing.Font("Microsoft Sans Serif", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.label11.Location = new System.Drawing.Point(151, 206);
+            this.label11.Name = "label11";
+            this.label11.Size = new System.Drawing.Size(28, 20);
+            this.label11.TabIndex = 41;
+            this.label11.Text = "Alt";
             // 
             // Form1
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(553, 527);
+            this.Controls.Add(this.ir_al_punto);
             this.Controls.Add(this.label4);
             this.Controls.Add(this.headingTrackBar);
             this.Controls.Add(this.headingLbl);
@@ -547,6 +624,13 @@
         private System.Windows.Forms.Button button6;
         private System.Windows.Forms.MenuStrip menuStrip1;
         private System.Windows.Forms.TrackBar altitudebar;
+        private System.Windows.Forms.Button ir_al_punto;
+        private System.Windows.Forms.TextBox altitudeBox;
+        private System.Windows.Forms.TextBox LonBox;
+        private System.Windows.Forms.TextBox LatBox;
+        private System.Windows.Forms.Label label11;
+        private System.Windows.Forms.Label label10;
+        private System.Windows.Forms.Label label8;
     }
 }
 

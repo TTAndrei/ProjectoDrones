@@ -1,4 +1,5 @@
-﻿using System;
+﻿using csDronLink;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
@@ -7,7 +8,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using csDronLink;
+using static MAVLink;
 
 namespace Formulario
 {
@@ -218,6 +219,14 @@ namespace Formulario
         {
             int valorSeleccionado = altitudebar.Value;
             dron.Despegar(valorSeleccionado, bloquear: false, EnAire, "Volando");
+        }
+
+        private void ir_al_punto_Click(object sender, EventArgs e)
+        {
+            float Lat = float.Parse(LatBox.Text);
+            float Lon = float.Parse(LonBox.Text);
+            float Alt = float.Parse(altitudeBox.Text);
+            dron.IrAlPunto(Lat, Lon, Alt, bloquear: false);
         }
     }
 }
