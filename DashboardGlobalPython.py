@@ -89,10 +89,14 @@ def stopTelem():
 def changeHeading (event):
     global dron
     global gradesSldr
+    heading = gradesSldr.get()
+    client.publish('interfazGlobal/autopilotServiceDemo/changeHeading', str(heading))
 
 def changeNavSpeed (event):
     global dron
     global speedSldr
+    speed = speedSldr.get()
+    client.publish('interfazGlobal/autopilotServiceDemo/changeNavSpeed', str(speed))
 
 
 def on_connect(client, userdata, flags, rc):
@@ -144,8 +148,25 @@ def crear_ventana():
     client = mqtt.Client("InterfazGlobal", transport="websockets")
 
     # me conecto al broker publico y gratuito
-    broker_address = "broker.hivemq.com"
-    broker_port = 8000
+    broker_address = "554f19f1f4944c978dd30b509d24afc0.s1.eu.hivemq.cloud"
+    broker_port = 8884
+    username = "InterfazGlobal"
+    password = "Kb2avDJmV2aj!Jz"
+
+    client.ws_set_options(path="/mqtt")
+
+    # IMPORTANTE: Configurar TLS/SSL para puerto 8884
+    client.tls_set(
+        ca_certs=None,
+        certfile=None,
+        keyfile=None,
+        cert_reqs=mqtt.ssl.CERT_REQUIRED,
+        tls_version=mqtt.ssl.PROTOCOL_TLSv1_2,
+        ciphers=None
+    )
+    client.tls_insecure_set(False)
+
+    client.username_pw_set(username, password)
 
     client.on_message = on_message
     client.on_connect = on_connect

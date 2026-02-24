@@ -64,6 +64,14 @@ def on_message(cli, userdata, message):
     if command == 'stopTelemetry':
         dron.stop_sending_telemetry_info()
 
+    if command == 'changeHeading':
+        heading = float(message.payload.decode("utf-8"))
+        dron.changeHeading(heading)
+    
+    if command == 'changeNavSpeed':
+        speed = float(message.payload.decode("utf-8"))
+        dron.changeNavSpeed(speed)
+
 
 def on_connect(client, userdata, flags, rc):
     global connected
@@ -79,8 +87,26 @@ dron = Dron()
 client = mqtt.Client("autopilotServiceDemo", transport="websockets")
 
 # me conecto al broker publico y gratuito
-broker_address = "broker.hivemq.com"
-broker_port = 8000
+broker_address = "554f19f1f4944c978dd30b509d24afc0.s1.eu.hivemq.cloud"
+broker_port = 8884
+username = "autopilotServiceDemo"
+password = "qkdb!LasqvHfy9V"
+
+client.ws_set_options(path="/mqtt")
+
+# IMPORTANTE: Configurar TLS/SSL para puerto 8884
+client.tls_set(
+    ca_certs=None,
+    certfile=None,
+    keyfile=None,
+    cert_reqs=mqtt.ssl.CERT_REQUIRED,
+    tls_version=mqtt.ssl.PROTOCOL_TLSv1_2,
+    ciphers=None
+)
+client.tls_insecure_set(False)
+
+client.username_pw_set(username, password)
+
 
 client.on_message = on_message
 client.on_connect = on_connect
