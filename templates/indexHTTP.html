@@ -73,6 +73,8 @@
             <div onclick="moverDron('SouthEast')" class="box">SE</div>
         </div>
 
+        <input type="range" id="headingsldr" min="0" max="360" value= "0" step="1">
+
         <!-- Altitud -->
         <div id="telemetriaDiv" style="font-size: 24px; text-align: center; width:100%; margin-top: 20px;">
             <p><strong>Altitud:</strong> <span id="altitudValor">0</span> m</p>
@@ -140,6 +142,10 @@ setInterval(() => {
         .then(r => r.json())
         .then(data => {
             document.getElementById("altitudValor").innerText = data.alt.toFixed(2);
+            headingsldr.addEventListener("change", () => {
+                const heading = headingsldr.value;
+                post("/changeHeading", { heading });
+            });
             const estado = data.state;
 
             if (estado === "flying") {

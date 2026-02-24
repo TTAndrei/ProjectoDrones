@@ -134,6 +134,16 @@ def http_move():
     mqtt_client.publish(topic, str(direction))
     return ("", 204)
 
+@app.route("/changeHeading", methods=["POST"])
+def http_change_heading():
+    data = request.get_json() or {}
+    heading = data.get("heading")
+    if heading is None:
+        return jsonify({"error": "faltó campo 'heading' en JSON"}), 400
+    topic = f"{TOPIC_PREFIX_PUB}/changeHeading"
+    mqtt_client.publish(topic, str(heading))
+    return ("", 204)
+
 @app.route("/telemetry", methods=["GET"])
 def http_telemetry():
     # Devuelve la última telemetría conocida
