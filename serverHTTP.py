@@ -10,8 +10,8 @@ import paho.mqtt.client as mqtt
 from threading import Lock
 
 # CONFIGURACIÓN
-MQTT_BROKER = "broker.hivemq.com"   # cambia si quieres otro broker
-MQTT_PORT = 1883
+MQTT_BROKER = "554f19f1f4944c978dd30b509d24afc0.s1.eu.hivemq.cloud"   # cambia si quieres otro broker
+MQTT_PORT = 8884
 MQTT_KEEPALIVE = 60
 
 # Topics (ajusta si tus tópicos son distintos)
@@ -28,7 +28,7 @@ telemetry = {
 telemetry_lock = Lock()
 
 # --- MQTT client setup ---
-mqtt_client = mqtt.Client(client_id="http_gateway_" + str(int(time.time())))
+mqtt_client = mqtt.Client(client_id="http_gateway_" + str(int(time.time())), transport="websockets")
 # Si tu broker requiere username/password:
 # mqtt_client.username_pw_set("user", "pass")
 
@@ -50,6 +50,24 @@ def on_message(client, userdata, msg):
                 telemetry["state"] = data["state"]
     except Exception as e:
         print("Error procesando mensaje MQTT:", e, msg.topic, msg.payload)
+
+username = "mobileFlask"
+password = "U8BM!Pv4D4R!isq"
+
+mqtt_client.ws_set_options(path="/mqtt")
+
+# IMPORTANTE: Configurar TLS/SSL para puerto 8884
+mqtt_client.tls_set(
+    ca_certs=None,
+    certfile=None,
+    keyfile=None,
+    cert_reqs=mqtt.ssl.CERT_REQUIRED,
+    tls_version=mqtt.ssl.PROTOCOL_TLSv1_2,
+    ciphers=None
+)
+mqtt_client.tls_insecure_set(False)
+
+mqtt_client.username_pw_set(username, password)
 
 mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
@@ -97,6 +115,12 @@ def http_takeoff():
 @app.route("/land", methods=["POST"])
 def http_land():
     topic = f"{TOPIC_PREFIX_PUB}/Land"
+    mqtt_client.publish(topic, "")
+    return ("", 204)
+
+@app.route("/rtl", methods=["POST"])
+def http_rtl():
+    topic = f"{TOPIC_PREFIX_PUB}/RTL"
     mqtt_client.publish(topic, "")
     return ("", 204)
 

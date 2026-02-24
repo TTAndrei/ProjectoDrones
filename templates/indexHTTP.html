@@ -57,6 +57,8 @@
 
         <!-- Botón Aterrizar -->
         <button id="botonAterrizar" class="boton" onclick="aterrizarDron()">Aterrizar Dron</button>
+        <button id="botonRTL" class="boton" onclick="rtlDron()">RTL</button>
+
 
         <!-- Botones de dirección -->
         <div class="direction">
@@ -112,7 +114,17 @@ function despegarDron() {
 }
 
 function aterrizarDron() {
-    post("/land");
+    post("/land")
+        .then(() => {
+            document.getElementById('botonAterrizar').classList.add('boton-amarillo');
+        });
+}
+
+function rtlDron() {
+    post("/rtl")
+    .then(() => {
+            document.getElementById('botonRTL').classList.add('boton-amarillo');
+        });
 }
 
 function moverDron(dir) {
@@ -135,6 +147,29 @@ setInterval(() => {
                 botonDespegar.classList.remove('boton-amarillo');
                 botonDespegar.classList.add('boton-verde');
             }
+
+                if (estado === "connected" && document.getElementById('botonDespegar').classList.contains('boton-amarillo')) {
+                    const botonAterrizar = document.getElementById('botonAterrizar');
+                    botonAterrizar.classList.remove('boton-amarillo');
+                    botonAterrizar.classList.add('boton-verde');
+                } 
+                else {
+                    const botonAterrizar = document.getElementById('botonAterrizar');
+                    botonAterrizar.classList.remove('boton-verde');
+                    botonAterrizar.classList.add('boton-azul');
+                
+                }
+
+                if (estado === "connected" && document.getElementById('botonRTL').classList.contains('boton-amarillo')) {
+                    const botonRTL = document.getElementById('botonRTL');
+                    botonRTL.classList.remove('boton-amarillo');
+                    botonRTL.classList.add('boton-verde');
+                } 
+                else {
+                    const botonRTL = document.getElementById('botonRTL');
+                    botonRTL.classList.remove('boton-verde');
+                    botonRTL.classList.add('boton-azul');
+                }
 
 
         })
