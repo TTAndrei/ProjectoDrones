@@ -84,7 +84,7 @@ def startTelem():
 
 def stopTelem():
     global dron
-    client.publish('interfazGlobal/autopilotServiceDemo/stopTelem')
+    client.publish('interfazGlobal/autopilotServiceDemo/stopTelemetry')
 
 def changeHeading (event):
     global dron
