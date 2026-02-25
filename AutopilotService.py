@@ -40,10 +40,7 @@ def on_message(cli, userdata, message):
             print ('vamos a armar')
             dron.arm()
             print ('vamos a despegar')
-            altura = float(message.payload.decode("utf-8"))
-            if altura is None :
-                altura = 5
-            print ('altura a la que despegar', altura)
+            altura = int(message.payload.decode("utf-8"))
             dron.takeOff(altura, blocking=False, callback=publish_event, params='flying')
 
     if command == 'go':

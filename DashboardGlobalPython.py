@@ -44,7 +44,7 @@ def connect ():
 
 def takeoff ():
     global dron
-    client.publish('interfazGlobal/autopilotServiceDemo/arm_takeOff')
+    client.publish('interfazGlobal/autopilotServiceDemo/arm_takeOff', str(5))
     arm_takeOffBtn['text'] = 'Despegando...'
     arm_takeOffBtn['fg'] = 'black'
     arm_takeOffBtn['bg'] = 'yellow'
@@ -258,7 +258,7 @@ def crear_ventana():
 
     SWBtn = tk.Button(navFrame, text="SW", bg="dark orange",
                         #command=lambda: go("SouthWest", SWBtn))
-                        command = lambda: go("Down", SWBtn))
+                        command = lambda: go("SouthWest", SWBtn))
     SWBtn.grid(row=2, column=0, padx=2, pady=2, sticky=tk.N + tk.S + tk.E + tk.W)
 
     SoBtn = tk.Button(navFrame, text="So", bg="dark orange",
@@ -267,7 +267,7 @@ def crear_ventana():
 
     SEBtn = tk.Button(navFrame, text="SE", bg="dark orange",
                         #command=lambda: go("SouthEast", SEBtn))
-                        command = lambda: go("Up", SEBtn))
+                        command = lambda: go("SouthEast", SEBtn))
     SEBtn.grid(row=2, column=2, padx=2, pady=2, sticky=tk.N + tk.S + tk.E + tk.W)
 
 
