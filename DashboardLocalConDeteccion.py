@@ -16,7 +16,6 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
 from aiortc.contrib.signaling import TcpSocketSignaling
 from av import VideoFrame
 import torch
-import subprocess, sys, os
 
 class Detector:
     def __init__ (self):
@@ -473,7 +472,5 @@ def crear_ventana():
 
 
 if __name__ == "__main__":
-    subprocess.Popen([sys.executable, "AutopilotService.py"])
-    subprocess.Popen([sys.executable, "CameraService.py"])
     ventana = crear_ventana()
     ventana.mainloop()
