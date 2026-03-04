@@ -17,7 +17,6 @@ from aiortc.contrib.signaling import TcpSocketSignaling
 from av import VideoFrame
 import torch
 
-
 class Detector:
     def __init__ (self):
         # Cargar el modelo YOLOv5 preentrenado de Ultralytics
@@ -76,7 +75,7 @@ class VideoReceiver:
                     #print(f"Unexpected frame type: {type(frame)}")
                     continue
                 if self.objectID:
-                    if frame_count % 20 == 0:
+                    if frame_count % 40 == 0:
                         detectado, rectangulo  = self.detector.detect(frame,self.objectID)
 
                     if detectado:
