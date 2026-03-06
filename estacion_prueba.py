@@ -58,13 +58,13 @@ nav_frame.columnconfigure((0, 1, 2), weight=1)
 
 botones_nav = {
     "NW": ('NorthWest', 0, 0),
-    "No": ('North', 0, 1),
+    "N": ('North', 0, 1),
     "NE": ('NorthEast', 0, 2),
-    "We": ('West', 1, 0),
-    "St": ('Stop', 1, 1),
-    "Ea": ('East', 1, 2),
+    "W": ('West', 1, 0),
+    "Stop": ('Stop', 1, 1),
+    "E": ('East', 1, 2),
     "SW": ('SouthWest', 2, 0),
-    "So": ('South', 2, 1),
+    "S": ('South', 2, 1),
     "SE": ('SouthEast', 2, 2)
 }
 
