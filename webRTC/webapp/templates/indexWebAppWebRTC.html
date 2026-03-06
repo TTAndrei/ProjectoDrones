@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebRTC Viewer</title>
+
+<style>
+body {
+    margin: 0;
+    padding: 0;
+    background: black;
+    overflow: hidden;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+video {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: black;
+}
+@media (max-width: 900px) and (orientation: portrait) {
+    video {
+        transform: rotate(90deg) scale(1.33);
+        transform-origin: center center;
+    }
+}
+
+#startButton {
+    position: absolute;
+    z-index: 9999;
+    bottom: 20px;
+    font-size: 32px;
+    padding: 22px 45px;
+    border-radius: 30px;
+    border: none;
+    background-color: #007BFF;
+    color: white;
+    font-weight: bold;
+}
+</style>
+</head>
+<body>
+
+<button id="startButton">CONECTAR</button>
+<video id="video" autoplay playsinline></video>
+
+<script>
+let ws = null;
+let pc = null;
+const btn = document.getElementById("startButton");
+const video = document.getElementById("video");
+
+function createPC() {
+    const config = {
+        iceServers: [
+            { urls: "stun:stun.relay.metered.ca:80" },
+            {
+                urls: "turn:standard.relay.metered.ca:80",
+                username: "337f189c0bf26e1022e19f05",
+                credential: "pSwi01maZzQZTUAf",
+            }
+        ]
+    };
+
+    pc = new RTCPeerConnection(config);
+    pc.onicecandidate = (event) => {
+        if (event.candidate) {
+            console.log ("Obtengo y envio al servidor un candidato");
+            ws.send(JSON.stringify({
+                type: "ice",
+                role: "receptor",
+                candidate: {
+                    candidate: event.candidate.candidate,
+                    sdpMid: event.candidate.sdpMid ?? "0",
+                    sdpMLineIndex: event.candidate.sdpMLineIndex ?? 0
+                }
+            }));
+        } else {
+            console.log ("Recibo indicación de que se acabaron los candidatos");
+            ws.send(JSON.stringify({
+                type: "ice",
+                role: "receptor",
+                candidate: null
+            }));
+        }
+    };
+
+    // Vídeo entrante
+    pc.ontrack = (ev) => {
+        if (ev.streams && ev.streams[0]) {
+            video.srcObject = ev.streams[0];
+        } else {
+            const ms = new MediaStream();
+            ms.addTrack(ev.track);
+            video.srcObject = ms;
+        }
+    };
+    return pc;
+}
+async function handleMessage(evt) {
+    const data = JSON.parse(evt.data);
+
+    if (data.type === "ice" && data.role === "emisor") {
+
+        if (data.candidate) {
+            print ("Recibo candidato del emisor");
+            await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+        } else {
+            print ("Recibo indicación de que se acabaron los candidatos para el emisor");
+            await pc.addIceCandidate(null);
+        }
+        return;
+    }
+
+    if (data.type === "sdp" && data.role === "emisor") {
+        console.log("Recibo oferta del emisor");
+
+        await pc.setRemoteDescription(
+            new RTCSessionDescription({ type: data.sdp_type, sdp: data.sdp })
+        );
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        console.log ("Envio aceptación de la oferta");
+        ws.send(JSON.stringify({
+            type: "sdp",
+            role: "receptor",
+            sdp: pc.localDescription.sdp,
+            sdp_type: pc.localDescription.type
+        }));
+    }
+}
+async function connect() {
+    const url = "ws://" + window.location.hostname + ":8108";
+
+    ws = new WebSocket(url);
+    ws.onmessage = handleMessage;
+
+    ws.onopen = () => {
+        createPC();
+        console.log ("Conectado al servidor. Envío petición");
+        ws.send(JSON.stringify({ type: "peticion" }));
+    };
+}
+
+btn.onclick = () => {
+    btn.disabled = true;
+    btn.style.backgroundColor = "#00C851";
+    connect();
+};
+
+// Se ejecuta cuando se cierra el navegador
+window.addEventListener("beforeunload", () => {
+   ws.send(JSON.stringify({
+            type: "client-disconnect",
+        }));
+});
+
+
+</script>
+
+</body>
+</html>
+
