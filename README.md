@@ -65,3 +65,6 @@ El siguiente paso consiste en implementar la transmision de video de la camara d
 
 ## 4.4 Detección de Imagen
 Este apartado es muy similar al anterior, [DashboardLocalConDeteccion](DashboardLocalConDeteccion.py) pero se han añadido unos botones extra en la consola para detectar cuando ciertos objetos aparezcan en patalla. Esto se hace mediante la red neuronal YOLO que usa el dataset COCO, lo que permite detectar hasta 80 objetos diferentes (personas no funcionan). 
+
+##NEW
+[README_Dashboard.docx](https://github.com/user-attachments/files/25898996/README_Dashboard.docx)
