@@ -46,8 +46,8 @@ METERED_API = "https://testconection1.metered.live/api/v1/turn/credentials?apiKe
 HIVEMQ_USERS = [
     {"user": "InterfazGlobal",  "password": "Kb2avDJmV2aj!Jz"},   # slot 1
     {"user": "Client1",  "password": "GhJpQCxh_ktB4J9"},   # slot 2
-    {"user": "",  "password": ""},   # slot 3
-    {"user": "",  "password": ""},   # slot 4
+    {"user": "Client2",  "password": "GhJpQCxh_ktB4J9"},   # slot 3
+    {"user": "Client3",  "password": "GhJpQCxh_ktB4J9"},   # slot 4
 ]
 
 # ── AutopilotService / MQTT ───────────────────────────────────────────────────

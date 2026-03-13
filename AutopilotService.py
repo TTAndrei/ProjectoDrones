@@ -38,8 +38,8 @@ def on_message(cli, userdata, message):
             baud = 57600
         else:
             # por defecto conectarse al simulador TCP
-            connection_string = 'tcp:127.0.0.1:5763'
-            baud = 115200
+            connection_string = 'COM3' #'tcp:127.0.0.1:5763'
+            baud = 57600 #115200
         dron.connect(connection_string, baud, freq=10)
         print(f'Conectado al dron ({connection_string} @ {baud})')
         publish_event('connected')
