@@ -151,47 +151,52 @@ def seleccionar_slot():
     import sys; sys.exit(0)
 
 
-def _marcar_slot_ocupado(idx, creds):
-    """Publica retain en el topic del slot para marcarlo como en uso."""
+def _publicar_retain(user, password, topic, payload):
+    """Publica un mensaje retain con QoS 1 y espera el ACK antes de desconectar.
+    El retain queda grabado en el broker independientemente de si el cliente
+    sigue conectado — así que podemos desconectar limpiamente sin riesgo.
+    """
     import uuid as _uuid_inner
+    ack = threading.Event()
+
     c = mqtt.Client(
-        client_id=f"mark_{idx}_{_uuid_inner.uuid4().hex[:4]}",
+        client_id=f"retain_{_uuid_inner.uuid4().hex[:6]}",
         transport="websockets"
     )
     c.ws_set_options(path="/mqtt")
     c.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
-    c.username_pw_set(creds["user"], creds["password"])
-    c.connect(BROKER_DASHBOARD, PORT)
-    c.loop_start()
-    time.sleep(0.3)
-    c.publish(f"{T_SLOT_PREFIX}{idx + 1}", creds["user"], retain=True, qos=1)
-    time.sleep(0.3)
-    # No desconectar — el retain persiste aunque el cliente se desconecte
+    c.username_pw_set(user, password)
+    c.on_publish = lambda cli, ud, mid: ack.set()
+    try:
+        c.connect(BROKER_DASHBOARD, PORT)
+        c.loop_start()
+        c.publish(topic, payload, retain=True, qos=1)
+        ack.wait(timeout=4.0)       # esperar ACK del broker (QoS 1)
+        c.loop_stop()
+        c.disconnect()
+        status = "✓" if ack.is_set() else "⚠ sin ACK"
+        print(f"[RETAIN] {status}  topic={topic}  payload={repr(payload)}")
+    except Exception as e:
+        print(f"[RETAIN] Error publicando retain {topic}: {e}")
+
+
+def _marcar_slot_ocupado(idx, creds):
+    """Publica retain en el topic del slot y registra la limpieza con atexit."""
+    import atexit
+    _publicar_retain(creds["user"], creds["password"],
+                     f"{T_SLOT_PREFIX}{idx + 1}", creds["user"])
+    # atexit garantiza la liberación incluso con Ctrl+C o excepción no capturada
+    atexit.register(liberar_slot)
 
 
 def liberar_slot():
-    """Borra el retain del slot al cerrar la aplicación."""
+    """Borra el retain del slot publicando payload vacío (borra el retain del broker)."""
     if SLOT_INDEX is None or USER_DASHBOARD is None:
         return
-    try:
-        import uuid as _uuid_inner
-        c = mqtt.Client(
-            client_id=f"free_{SLOT_INDEX}_{_uuid_inner.uuid4().hex[:4]}",
-            transport="websockets"
-        )
-        c.ws_set_options(path="/mqtt")
-        c.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
-        c.username_pw_set(USER_DASHBOARD, PASS_DASHBOARD)
-        c.connect(BROKER_DASHBOARD, PORT)
-        c.loop_start()
-        time.sleep(0.3)
-        c.publish(f"{T_SLOT_PREFIX}{SLOT_INDEX + 1}", "", retain=True, qos=1)
-        time.sleep(0.3)
-        c.loop_stop()
-        c.disconnect()
-        print(f"[SLOT] Slot {SLOT_INDEX + 1} liberado")
-    except Exception as e:
-        print(f"[SLOT] Error liberando slot: {e}")
+    print(f"[SLOT] Liberando slot {SLOT_INDEX + 1}...")
+    _publicar_retain(USER_DASHBOARD, PASS_DASHBOARD,
+                     f"{T_SLOT_PREFIX}{SLOT_INDEX + 1}", "")
+    print(f"[SLOT] Slot {SLOT_INDEX + 1} liberado")
 
 
 def _mostrar_error_slots_llenos():
@@ -426,38 +431,17 @@ def negociar_rol_ground_station():
 
 
 def _publicar_claim():
-    """Publica el claim de Estación de Tierra con retain=True.
-    Lo hace un cliente independiente para no interferir con el dashboard."""
-    claim_client = mqtt.Client(client_id=MY_CLIENT_ID + "_claim", transport="websockets")
-    claim_client.ws_set_options(path="/mqtt")
-    claim_client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
-    claim_client.username_pw_set(USER_DASHBOARD, PASS_DASHBOARD)
-    claim_client.connect(BROKER_DASHBOARD, PORT)
-    claim_client.loop_start()
-    time.sleep(0.3)  # esperar conexión
-    claim_client.publish(T_AUTOPILOT_CLAIM, MY_CLIENT_ID, retain=True, qos=1)
-    time.sleep(0.3)  # esperar que el broker confirme
-    # No desconectar — el retain persiste en el broker aunque el cliente se vaya
+    """Publica el claim de Estación de Tierra con retain=True y registra atexit."""
+    import atexit
+    _publicar_retain(USER_DASHBOARD, PASS_DASHBOARD, T_AUTOPILOT_CLAIM, MY_CLIENT_ID)
+    atexit.register(limpiar_claim_ground_station)
 
 
 def limpiar_claim_ground_station():
-    """Borra el claim retain al cerrar la Estación de Tierra.
-    Publica payload vacío en el topic retain — el broker elimina el retain."""
-    try:
-        c = mqtt.Client(client_id=MY_CLIENT_ID + "_cleanup", transport="websockets")
-        c.ws_set_options(path="/mqtt")
-        c.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
-        c.username_pw_set(USER_DASHBOARD, PASS_DASHBOARD)
-        c.connect(BROKER_DASHBOARD, PORT)
-        c.loop_start()
-        time.sleep(0.3)
-        c.publish(T_AUTOPILOT_CLAIM, "", retain=True, qos=1)  # vacío = borrar retain
-        time.sleep(0.3)
-        c.loop_stop()
-        c.disconnect()
-        print("[ROL] Claim liberado — el próximo en arrancar será Estación de Tierra")
-    except Exception as e:
-        print(f"[ROL] Error limpiando claim: {e}")
+    """Borra el claim retain publicando payload vacío."""
+    print("[ROL] Liberando claim de Estación de Tierra...")
+    _publicar_retain(USER_DASHBOARD, PASS_DASHBOARD, T_AUTOPILOT_CLAIM, "")
+    print("[ROL] Claim liberado")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
