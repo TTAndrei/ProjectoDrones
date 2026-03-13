@@ -55,6 +55,19 @@ HIVEMQ_USERS = [
 USER_AUTOPILOT = ""   # rellena con el usuario HiveMQ del AutopilotService
 PASS_AUTOPILOT = ""   # rellena con su contraseña
 
+HIVEMQ_USERS = [
+    {"user": "InterfazGlobal",  "password": "Kb2avDJmV2aj!Jz"},   # slot 1
+    {"user": "Client1",  "password": "GhJpQCxh_ktB4J9"},   # slot 2
+    {"user": "Client2",  "password": "GhJpQCxh_ktB4J9"},   # slot 3
+    {"user": "Client3",  "password": "GhJpQCxh_ktB4J9"},   # slot 4
+]
+
+# ── AutopilotService / MQTT ───────────────────────────────────────────────────
+# Usuario dedicado al AutopilotService — solo lo usa la Estación de Tierra.
+USER_AUTOPILOT = "autopilotServiceDemo"   # rellena con el usuario HiveMQ del AutopilotService
+PASS_AUTOPILOT = "qkdb!LasqvHfy9V"   # rellena con su contraseña
+
+
 # ── Topics fijos ──────────────────────────────────────────────────────────────
 T_OFFER  = "webrtc/offer"
 T_ANSWER = "webrtc/answer"
