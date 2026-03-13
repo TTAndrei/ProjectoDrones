@@ -62,6 +62,7 @@ client_dashboard = None   # cliente MQTT del dashboard
 pending_offer = None   # offer recibida antes de pulsar el botón de vídeo
 previousBtn   = None
 MODE          = None   # "global" o "local"
+REAL_DRONE    = False  # si True se conecta a COM3/57600 en modo local, si False usa el TCP de simulación
 
 dron          = Dron() # instancia del dron — compartida entre autopiloto y dashboard local
 
@@ -83,6 +84,54 @@ _goto_callback = None   # función go_to_gps según el modo (global/local)
 # YOLOv5
 detect_object_id = None
 yolo_model       = None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PANTALLA DE SELECCIÓN DE SIMULACIÓN / DRON
+# ══════════════════════════════════════════════════════════════════════════════
+
+def selector_simulacion():
+    """Ventana inicial que pregunta si se usará simulación o dron real."""
+    seleccion = {"valor": None}
+
+    sel = tk.Tk()
+    sel.title("Dashboard Dron — Simulación o dron real")
+    sel.resizable(False, False)
+    sel.configure(bg="#212121")
+
+    w, h = 440, 280
+    x = (sel.winfo_screenwidth()  - w) // 2
+    y = (sel.winfo_screenheight() - h) // 2
+    sel.geometry(f"{w}x{h}+{x}+{y}")
+
+    tk.Label(sel, text="Dashboard Dron",
+             font=("Arial", 18, "bold"), bg="#212121", fg="white").pack(pady=(28, 4))
+    tk.Label(sel, text="¿Usar simulación o dron real?",
+             font=("Arial", 10), bg="#212121", fg="#aaaaaa").pack(pady=(0, 24))
+
+    btn_frame = tk.Frame(sel, bg="#212121")
+    btn_frame.pack(fill="x", padx=40)
+
+    def elegir(valor):
+        seleccion["valor"] = valor
+        sel.destroy()
+
+    tk.Button(btn_frame, text="Simulación",
+              font=("Arial", 12, "bold"), bg="#2196f3", fg="white",
+              activebackground="#1976d2", relief="flat", cursor="hand2", pady=10,
+              command=lambda: elegir(False)).pack(fill="x", padx=2, pady=2)
+    tk.Button(btn_frame, text="Dron real",
+              font=("Arial", 12, "bold"), bg="#e94560", fg="white",
+              activebackground="#c73652", relief="flat", cursor="hand2", pady=10,
+              command=lambda: elegir(True)).pack(fill="x", padx=2, pady=2)
+
+    sel.protocol("WM_DELETE_WINDOW", sel.destroy)
+    sel.mainloop()
+
+    if seleccion["valor"] is None:
+        import sys; sys.exit(0)
+
+    return seleccion["valor"]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -878,7 +927,10 @@ def _reset_btns():
 
 # Modo Global — publica comandos MQTT que recibe el AutopilotService integrado
 def connect_global():
-    client_dashboard.publish('interfazGlobal/autopilotServiceDemo/connect')
+    if REAL_DRONE == False:
+        client_dashboard.publish('interfazGlobal/autopilotServiceDemo/connect')
+    else:
+        client_dashboard.publish('interfazGlobal/autopilotServiceDemo/connect', 'REAL')
     connectBtn.configure(text='Conectado', fg='white', bg='green')
     speedSldr.set(1)
 
@@ -908,7 +960,10 @@ def changeNavSpeed_global(e): client_dashboard.publish('interfazGlobal/autopilot
 
 # Modo Local — habla directamente con dronLink
 def connect_local():
-    dron.connect('tcp:127.0.0.1:5763', 115200)
+    if REAL_DRONE == False:
+        dron.connect('tcp:127.0.0.1:5763', 115200)
+    else:
+        dron.connect('COM3', 57600)
     connectBtn.configure(text='Conectado', fg='white', bg='green')
     speedSldr.set(1)
 
@@ -1132,7 +1187,11 @@ def crear_ventana(modo):
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    # primer selector: simulación vs dron real
+    REAL_DRONE = selector_simulacion()
+
+    # segundo selector: modo global/local
     modo = selector_modo()
     MODE = modo   # asignar variable global antes de crear la ventana
-    print(f"[MAIN] Modo: {modo}")
+    print(f"[MAIN] Simulación={'sí' if not REAL_DRONE else 'no'}, Modo: {modo}")
     crear_ventana(modo).mainloop()

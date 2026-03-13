@@ -18,8 +18,8 @@ def showTelemetryInfo (telemetry_info):
 
 def connect ():
     global dron, speedSldr
-    connection_string ='tcp:127.0.0.1:5763'
-    baud = 115200
+    connection_string ='COM3'
+    baud = 57600
     dron.connect(connection_string,baud)
     # cambiamos el color del boton
     connectBtn['text'] = 'Conectado'
@@ -46,7 +46,7 @@ def takeoff ():
     global dron
     # despegamos a una altura de 5 metros
     # llamada no bloqueante. Cuando alcance la altura indicada ejecutará la función inTheAir
-    dron.takeOff (10, blocking = False,  callback = inTheAir)
+    dron.takeOff (5, blocking = False,  callback = inTheAir)
     takeOffBtn['text'] = 'Despegando...'
     takeOffBtn['fg'] = 'black'
     takeOffBtn['bg'] = 'yellow'

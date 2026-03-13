@@ -30,9 +30,18 @@ def on_message(cli, userdata, message):
     sending_topic = "autopilotServiceDemo/" + origin # lo necesitaré para enviar las respuestas
 
     if command == 'connect':
-        connection_string = 'tcp:127.0.0.1:5763'
-        baud = 115200
+        # decide between simulator and real drone based on payload
+        # el dashboard publica solo el topic o bien incluye "REAL" como payload
+        payload = message.payload.decode("utf-8").strip()
+        if payload == 'REAL':
+            connection_string = 'COM3'
+            baud = 57600
+        else:
+            # por defecto conectarse al simulador TCP
+            connection_string = 'tcp:127.0.0.1:5763'
+            baud = 115200
         dron.connect(connection_string, baud, freq=10)
+        print(f'Conectado al dron ({connection_string} @ {baud})')
         publish_event('connected')
 
     if command == 'arm_takeOff':
