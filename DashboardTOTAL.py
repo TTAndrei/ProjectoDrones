@@ -52,8 +52,8 @@ HIVEMQ_USERS = [
 
 # ── AutopilotService / MQTT ───────────────────────────────────────────────────
 # Usuario dedicado al AutopilotService — solo lo usa la Estación de Tierra.
-USER_AUTOPILOT = ""   # rellena con el usuario HiveMQ del AutopilotService
-PASS_AUTOPILOT = ""   # rellena con su contraseña
+USER_AUTOPILOT = "autopilotServiceDemo"   # rellena con el usuario HiveMQ del AutopilotService
+PASS_AUTOPILOT = "qkdb!LasqvHfy9V"   # rellena con su contraseña
 
 # ── Topics fijos ──────────────────────────────────────────────────────────────
 T_OFFER  = "webrtc/offer"
