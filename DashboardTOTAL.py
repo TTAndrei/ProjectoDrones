@@ -44,8 +44,8 @@ METERED_API = "https://testconection1.metered.live/api/v1/turn/credentials?apiKe
 # Rellena nombre y contraseña con los usuarios que hayas creado en HiveMQ.
 # Deja vacío ("") cualquier slot que no hayas creado todavía.
 HIVEMQ_USERS = [
-    {"user": "Client1",  "password": "GhJpQCxh_ktB4J9"},   # slot 1
-    {"user": "",  "password": ""},   # slot 2
+    {"user": "InterfazGlobal",  "password": "Kb2avDJmV2aj!Jz"},   # slot 1
+    {"user": "Client1",  "password": "GhJpQCxh_ktB4J9"},   # slot 2
     {"user": "",  "password": ""},   # slot 3
     {"user": "",  "password": ""},   # slot 4
 ]
