@@ -32,27 +32,199 @@ from dronLink.Dron import Dron
 #  CONFIGURACIÓN
 # ══════════════════════════════════════════════════════════════════════════════
 
-# ── Dashboard / MQTT ──────────────────────────────────────────────────────────
-BROKER_DASHBOARD  = "554f19f1f4944c978dd30b509d24afc0.s1.eu.hivemq.cloud"
-PORT              = 8884
-USER_DASHBOARD    = "InterfazGlobal"
-PASS_DASHBOARD    = "Kb2avDJmV2aj!Jz"
-
-T_OFFER  = "webrtc/offer"
-T_ANSWER = "webrtc/answer"
-
-# Topic con retain=True para negociar quién es la Estación de Tierra
-T_AUTOPILOT_CLAIM = "autopilot/claim"
+# ── Broker HiveMQ ─────────────────────────────────────────────────────────────
+BROKER_DASHBOARD = "554f19f1f4944c978dd30b509d24afc0.s1.eu.hivemq.cloud"
+PORT             = 8884
 
 METERED_API = "https://testconection1.metered.live/api/v1/turn/credentials?apiKey=57312a00508de97f6ca0758cce3935fe7670"
 
+# ── Pool de usuarios HiveMQ (dashboard + camera) ──────────────────────────────
+# HiveMQ requiere credenciales fijas por usuario.
+# Cada instancia del dashboard ocupa el primer slot libre al arrancar.
+# Rellena nombre y contraseña con los usuarios que hayas creado en HiveMQ.
+# Deja vacío ("") cualquier slot que no hayas creado todavía.
+HIVEMQ_USERS = [
+    {"user": "Client1",  "password": "GhJpQCxh_ktB4J9"},   # slot 1
+    {"user": "",  "password": ""},   # slot 2
+    {"user": "",  "password": ""},   # slot 3
+    {"user": "",  "password": ""},   # slot 4
+]
+
 # ── AutopilotService / MQTT ───────────────────────────────────────────────────
-USER_AUTOPILOT = "autopilotServiceDemo"
-PASS_AUTOPILOT = "qkdb!LasqvHfy9V"
+# Usuario dedicado al AutopilotService — solo lo usa la Estación de Tierra.
+USER_AUTOPILOT = ""   # rellena con el usuario HiveMQ del AutopilotService
+PASS_AUTOPILOT = ""   # rellena con su contraseña
+
+# ── Topics fijos ──────────────────────────────────────────────────────────────
+T_OFFER  = "webrtc/offer"
+T_ANSWER = "webrtc/answer"
+
+# Topic retain para negociar quién es la Estación de Tierra
+T_AUTOPILOT_CLAIM = "autopilot/claim"
+
+# Topic retain por slot: cada slot marca si está ocupado
+# Formato: "slot/ocupado/1", "slot/ocupado/2", ...
+T_SLOT_PREFIX = "slot/ocupado/"
 
 # ── TCP (Modo Local) ──────────────────────────────────────────────────────────
 TCP_HOST = "localhost"
 TCP_PORT = 9999
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SELECCIÓN AUTOMÁTICA DE SLOT HIVEMQ
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Credenciales activas de esta instancia — se asignan en seleccionar_slot()
+USER_DASHBOARD = None
+PASS_DASHBOARD = None
+SLOT_INDEX     = None   # índice 0-3 del slot ocupado por esta instancia
+
+
+def seleccionar_slot():
+    """Prueba los slots en orden y ocupa el primero que esté libre.
+
+    Un slot está libre si:
+      · Tiene usuario/contraseña rellenos en HIVEMQ_USERS, Y
+      · No hay ningún mensaje retain en "slot/ocupado/<n>" en el broker.
+
+    Al ocupar un slot publica su índice con retain=True en ese topic,
+    de modo que los demás arranques sepan que ya está en uso.
+
+    Retorna el índice del slot ocupado, o termina el proceso si no hay ninguno.
+    """
+    global USER_DASHBOARD, PASS_DASHBOARD, SLOT_INDEX
+
+    import uuid as _uuid_inner
+
+    slots_con_credenciales = [
+        (i, s) for i, s in enumerate(HIVEMQ_USERS)
+        if s["user"].strip() and s["password"].strip()
+    ]
+
+    if not slots_con_credenciales:
+        print("[SLOT] ERROR: no hay ningún usuario HiveMQ configurado en HIVEMQ_USERS.")
+        import sys; sys.exit(1)
+
+    for idx, creds in slots_con_credenciales:
+        topic_slot = f"{T_SLOT_PREFIX}{idx + 1}"
+        ocupado    = {"valor": False, "evento": threading.Event()}
+
+        def _on_msg(cli, userdata, msg, _t=topic_slot):
+            payload = msg.payload.decode("utf-8").strip()
+            if msg.topic == _t and payload:
+                ocupado["valor"] = True
+            ocupado["evento"].set()
+
+        probe = mqtt.Client(
+            client_id=f"probe_{idx}_{_uuid_inner.uuid4().hex[:4]}",
+            transport="websockets"
+        )
+        probe.ws_set_options(path="/mqtt")
+        probe.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
+        probe.username_pw_set(creds["user"], creds["password"])
+        try:
+            probe.connect(BROKER_DASHBOARD, PORT)
+        except Exception as e:
+            print(f"[SLOT] Slot {idx+1} — error de conexión: {e}")
+            continue
+
+        probe.on_message = _on_msg
+        probe.subscribe(topic_slot)
+        probe.loop_start()
+        ocupado["evento"].wait(timeout=1.5)
+        probe.loop_stop()
+        probe.disconnect()
+
+        if not ocupado["valor"]:
+            # Slot libre → ocuparlo
+            USER_DASHBOARD = creds["user"]
+            PASS_DASHBOARD = creds["password"]
+            SLOT_INDEX     = idx
+            _marcar_slot_ocupado(idx, creds)
+            print(f"[SLOT] Slot {idx+1} ocupado (usuario: {creds['user']})")
+            return idx
+
+        print(f"[SLOT] Slot {idx+1} ocupado — probando siguiente...")
+
+    # Todos los slots ocupados
+    _mostrar_error_slots_llenos()
+    import sys; sys.exit(0)
+
+
+def _marcar_slot_ocupado(idx, creds):
+    """Publica retain en el topic del slot para marcarlo como en uso."""
+    import uuid as _uuid_inner
+    c = mqtt.Client(
+        client_id=f"mark_{idx}_{_uuid_inner.uuid4().hex[:4]}",
+        transport="websockets"
+    )
+    c.ws_set_options(path="/mqtt")
+    c.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
+    c.username_pw_set(creds["user"], creds["password"])
+    c.connect(BROKER_DASHBOARD, PORT)
+    c.loop_start()
+    time.sleep(0.3)
+    c.publish(f"{T_SLOT_PREFIX}{idx + 1}", creds["user"], retain=True, qos=1)
+    time.sleep(0.3)
+    # No desconectar — el retain persiste aunque el cliente se desconecte
+
+
+def liberar_slot():
+    """Borra el retain del slot al cerrar la aplicación."""
+    if SLOT_INDEX is None or USER_DASHBOARD is None:
+        return
+    try:
+        import uuid as _uuid_inner
+        c = mqtt.Client(
+            client_id=f"free_{SLOT_INDEX}_{_uuid_inner.uuid4().hex[:4]}",
+            transport="websockets"
+        )
+        c.ws_set_options(path="/mqtt")
+        c.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
+        c.username_pw_set(USER_DASHBOARD, PASS_DASHBOARD)
+        c.connect(BROKER_DASHBOARD, PORT)
+        c.loop_start()
+        time.sleep(0.3)
+        c.publish(f"{T_SLOT_PREFIX}{SLOT_INDEX + 1}", "", retain=True, qos=1)
+        time.sleep(0.3)
+        c.loop_stop()
+        c.disconnect()
+        print(f"[SLOT] Slot {SLOT_INDEX + 1} liberado")
+    except Exception as e:
+        print(f"[SLOT] Error liberando slot: {e}")
+
+
+def _mostrar_error_slots_llenos():
+    """Ventana de error cuando todos los slots están en uso."""
+    err = tk.Tk()
+    err.title("Sin slots disponibles")
+    err.resizable(False, False)
+    err.configure(bg="#212121")
+    w, h = 420, 220
+    x = (err.winfo_screenwidth()  - w) // 2
+    y = (err.winfo_screenheight() - h) // 2
+    err.geometry(f"{w}x{h}+{x}+{y}")
+    tk.Label(err, text="⚠", font=("Arial", 36), bg="#212121", fg="#e94560").pack(pady=(20, 4))
+    tk.Label(err, text="No hay slots disponibles",
+             font=("Arial", 13, "bold"), bg="#212121", fg="white").pack()
+    tk.Label(err, text="Los 4 usuarios de HiveMQ están en uso.\nCierra otra instancia del dashboard e inténtalo de nuevo.",
+             font=("Arial", 9), bg="#212121", fg="#aaaaaa", justify="center").pack(pady=10)
+    tk.Button(err, text="Cerrar", font=("Arial", 10, "bold"),
+              bg="#e94560", fg="white", relief="flat", padx=20, pady=6,
+              command=err.destroy).pack()
+    err.protocol("WM_DELETE_WINDOW", err.destroy)
+    err.mainloop()
+
+
+# ── ID único por instancia ────────────────────────────────────────────────────
+# Se usa como sufijo en client_id MQTT y en los topics de esta instancia.
+#   · client_id único → el broker no expulsa a otras instancias conectadas
+#   · MY_ORIGIN único → cada instancia tiene su propio "buzón" de respuestas
+#     Ej: "interfazGlobal_a3f7/autopilotServiceDemo/arm_takeOff"
+#         "autopilotServiceDemo/interfazGlobal_a3f7/flying"
+import uuid as _uuid
+_INST_SUFFIX = _uuid.uuid4().hex[:6]            # 6 chars hex, ej. "a3f7c2"
+MY_ORIGIN    = f"interfazGlobal_{_INST_SUFFIX}" # origen único de esta instancia
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  ESTADO GLOBAL
@@ -206,7 +378,8 @@ def selector_modo():
 #       reinicio del proceso con la misma instancia.
 # ══════════════════════════════════════════════════════════════════════════════
 
-MY_CLIENT_ID = f"Dashboard_{int(time.time())}"   # ID único por arranque
+# MY_ORIGIN ya declarado arriba — se reutiliza como client_id base de negociación
+MY_CLIENT_ID = MY_ORIGIN   # alias para compatibilidad con negociar_rol_ground_station
 
 def negociar_rol_ground_station():
     """Determina si esta instancia debe actuar como Estación de Tierra.
@@ -579,7 +752,7 @@ async def _apply_answer(pc_cam, data, event):
 
 def start_camera_service_global():
     def _run():
-        cam_client = mqtt.Client(client_id="CameraService", transport="websockets")
+        cam_client = mqtt.Client(client_id=f"CameraService_{_INST_SUFFIX}", transport="websockets")
         cam_client.ws_set_options(path="/mqtt")
         cam_client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
         cam_client.username_pw_set(USER_DASHBOARD, PASS_DASHBOARD)
@@ -865,7 +1038,7 @@ def on_mqtt_message_dashboard(cli, userdata, msg):
                 handle_offer_dashboard(data), loop_dashboard)
         return
 
-    if topic == 'autopilotServiceDemo/interfazGlobal/telemetryInfo':
+    if topic == f'autopilotServiceDemo/{MY_ORIGIN}/telemetryInfo':
         altShowLbl['text']     = f"{round(data.get('alt', 0), 1)} m"
         headingShowLbl['text'] = f"{round(data.get('heading', 0), 1)}°"
         stateShowLbl['text']   = data.get('state', '')
@@ -878,14 +1051,14 @@ def on_mqtt_message_dashboard(cli, userdata, msg):
             update_map(lat, lon)
         else:
             gpsShowLbl['text'] = 'sin GPS'
-    elif topic == 'autopilotServiceDemo/interfazGlobal/connected':
+    elif topic == f'autopilotServiceDemo/{MY_ORIGIN}/connected':
         connectBtn.configure(text='Conectado', fg='white', bg='green')
-    elif topic == 'autopilotServiceDemo/interfazGlobal/flying':
+    elif topic == f'autopilotServiceDemo/{MY_ORIGIN}/flying':
         arm_takeOffBtn.configure(text='En el aire', fg='white', bg='green')
-    elif topic == 'autopilotServiceDemo/interfazGlobal/landed':
+    elif topic == f'autopilotServiceDemo/{MY_ORIGIN}/landed':
         landBtn.configure(text='En tierra', fg='white', bg='green')
         threading.Thread(target=lambda: (time.sleep(5), _reset_btns()), daemon=True).start()
-    elif topic == 'autopilotServiceDemo/interfazGlobal/atHome':
+    elif topic == f'autopilotServiceDemo/{MY_ORIGIN}/atHome':
         RTLBtn.configure(text='En tierra', fg='white', bg='green')
         threading.Thread(target=lambda: (time.sleep(5), _reset_btns()), daemon=True).start()
 
@@ -959,7 +1132,7 @@ def goto_gps_global(lat, lon):
             alt = 5.0
         payload = json.dumps({"lat": lat, "lon": lon, "alt": alt})
         client_dashboard.publish(
-            'interfazGlobal/autopilotServiceDemo/goto', payload)
+            f'{MY_ORIGIN}/autopilotServiceDemo/goto', payload)
         print(f"[MAP] MQTT goto → lat={lat:.6f}, lon={lon:.6f}, alt={alt}m")
 
 
@@ -986,35 +1159,35 @@ def _reset_btns():
 
 def connect_global():
     if REAL_DRONE == False:
-        client_dashboard.publish('interfazGlobal/autopilotServiceDemo/connect')
+        client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/connect')
     else:
-        client_dashboard.publish('interfazGlobal/autopilotServiceDemo/connect', 'REAL')
+        client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/connect', 'REAL')
     connectBtn.configure(text='Conectado', fg='white', bg='green')
     speedSldr.set(1)
 
 def takeoff_global():
-    client_dashboard.publish('interfazGlobal/autopilotServiceDemo/arm_takeOff', '5')
+    client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/arm_takeOff', '5')
     arm_takeOffBtn.configure(text='Despegando...', fg='black', bg='yellow')
 
 def land_global():
-    client_dashboard.publish('interfazGlobal/autopilotServiceDemo/Land')
+    client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/Land')
     landBtn.configure(text='Aterrizando...', fg='black', bg='yellow')
 
 def RTL_global():
-    client_dashboard.publish('interfazGlobal/autopilotServiceDemo/RTL')
+    client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/RTL')
     RTLBtn.configure(text='Retornando...', fg='black', bg='yellow')
 
 def go_global(direction, btn):
     global previousBtn
     if previousBtn: previousBtn.configure(fg='black', bg='dark orange')
-    client_dashboard.publish('interfazGlobal/autopilotServiceDemo/go', direction)
+    client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/go', direction)
     btn.configure(fg='white', bg='green')
     previousBtn = btn
 
-def startTelem_global(): client_dashboard.publish('interfazGlobal/autopilotServiceDemo/startTelemetry')
-def stopTelem_global():  client_dashboard.publish('interfazGlobal/autopilotServiceDemo/stopTelemetry')
-def changeHeading_global(e): client_dashboard.publish('interfazGlobal/autopilotServiceDemo/changeHeading', str(gradesSldr.get()))
-def changeNavSpeed_global(e): client_dashboard.publish('interfazGlobal/autopilotServiceDemo/changeNavSpeed', str(speedSldr.get()))
+def startTelem_global(): client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/startTelemetry')
+def stopTelem_global():  client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/stopTelemetry')
+def changeHeading_global(e): client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/changeHeading', str(gradesSldr.get()))
+def changeNavSpeed_global(e): client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/changeNavSpeed', str(speedSldr.get()))
 
 def connect_local():
     if REAL_DRONE == False:
@@ -1101,14 +1274,16 @@ def crear_ventana(modo):
         start_camera_service_global()
 
         # ── Cliente MQTT del dashboard ────────────────────────────────────────
-        client_dashboard = mqtt.Client(client_id="DashboardGlobal", transport="websockets")
+        # client_id único por instancia → el broker no expulsa al cliente anterior
+        client_dashboard = mqtt.Client(client_id=f"Dashboard_{_INST_SUFFIX}", transport="websockets")
         client_dashboard.ws_set_options(path="/mqtt")
         client_dashboard.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
         client_dashboard.username_pw_set(USER_DASHBOARD, PASS_DASHBOARD)
         client_dashboard.on_message = on_mqtt_message_dashboard
         client_dashboard.on_connect = lambda c,u,f,rc: print("[MQTT] Dashboard conectado" if rc==0 else f"[MQTT] Error {rc}")
         client_dashboard.connect(BROKER_DASHBOARD, PORT)
-        client_dashboard.subscribe('autopilotServiceDemo/interfazGlobal/#')
+        # Suscribirse al buzón propio de esta instancia (topic dinámico con MY_ORIGIN)
+        client_dashboard.subscribe(f'autopilotServiceDemo/{MY_ORIGIN}/#')
         client_dashboard.subscribe(T_OFFER)
         client_dashboard.loop_start()
 
@@ -1271,10 +1446,15 @@ def crear_ventana(modo):
 
     v.geometry("950x750")
 
-    # ── Limpiar claim al cerrar la Estación de Tierra ─────────────────────────
+    # ── Liberar recursos al cerrar ────────────────────────────────────────────
     if modo == "global" and REAL_DRONE and IS_GROUND_STATION:
+        # Estación de Tierra: libera claim Y slot
         v.protocol("WM_DELETE_WINDOW",
-                   lambda: (limpiar_claim_ground_station(), v.destroy()))
+                   lambda: (limpiar_claim_ground_station(), liberar_slot(), v.destroy()))
+    elif modo == "global":
+        # Cliente (o simulación global): solo libera el slot
+        v.protocol("WM_DELETE_WINDOW",
+                   lambda: (liberar_slot(), v.destroy()))
 
     return v
 
@@ -1287,5 +1467,10 @@ if __name__ == "__main__":
     REAL_DRONE = selector_simulacion()
     modo = selector_modo()
     MODE = modo
+
+    # En modo global hay que ocupar un slot HiveMQ antes de continuar
+    if modo == "global":
+        seleccionar_slot()   # asigna USER_DASHBOARD, PASS_DASHBOARD, SLOT_INDEX
+
     print(f"[MAIN] Simulación={'sí' if not REAL_DRONE else 'no'}, Modo: {modo}")
     crear_ventana(modo).mainloop()
