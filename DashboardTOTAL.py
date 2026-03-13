@@ -44,16 +44,16 @@ METERED_API = "https://testconection1.metered.live/api/v1/turn/credentials?apiKe
 # Rellena nombre y contraseña con los usuarios que hayas creado en HiveMQ.
 # Deja vacío ("") cualquier slot que no hayas creado todavía.
 HIVEMQ_USERS = [
-    {"user": "InterfazGlobal",  "password": "Kb2avDJmV2aj!Jz"},   # slot 1
-    {"user": "Client1",  "password": "GhJpQCxh_ktB4J9"},   # slot 2
-    {"user": "Client2",  "password": "GhJpQCxh_ktB4J9"},   # slot 3
-    {"user": "Client3",  "password": "GhJpQCxh_ktB4J9"},   # slot 4
+    {"user": "",  "password": ""},   # slot 1
+    {"user": "",  "password": ""},   # slot 2
+    {"user": "",  "password": ""},   # slot 3
+    {"user": "",  "password": ""},   # slot 4
 ]
 
 # ── AutopilotService / MQTT ───────────────────────────────────────────────────
 # Usuario dedicado al AutopilotService — solo lo usa la Estación de Tierra.
-USER_AUTOPILOT = "autopilotServiceDemo"   # rellena con el usuario HiveMQ del AutopilotService
-PASS_AUTOPILOT = "qkdb!LasqvHfy9V"   # rellena con su contraseña
+USER_AUTOPILOT = ""   # rellena con el usuario HiveMQ del AutopilotService
+PASS_AUTOPILOT = ""   # rellena con su contraseña
 
 # ── Topics fijos ──────────────────────────────────────────────────────────────
 T_OFFER  = "webrtc/offer"
@@ -392,7 +392,7 @@ def negociar_rol_ground_station():
     Retorna True  → soy Estación de Tierra (arranco AutopilotService).
     Retorna False → soy Cliente (no arranco AutopilotService).
 
-    Solo se llama cuando MODE=="global" y REAL_DRONE==True.
+    Se llama siempre en modo global (tanto dron real como simulación).
     """
     resultado = {"claim_recibido": None, "evento": threading.Event()}
 
@@ -1235,17 +1235,13 @@ def crear_ventana(modo):
     global speedSldr, gradesSldr, previousBtn
 
     if modo == "global":
-        # ── Negociación de rol (solo en modo global + dron real) ──────────────
-        if REAL_DRONE:
-            print("[ROL] Negociando rol Estación de Tierra vs Cliente...")
-            IS_GROUND_STATION = negociar_rol_ground_station()
-        else:
-            # En simulación siempre arranca el AutopilotService localmente
-            IS_GROUND_STATION = True
-
-        # ── Mostrar diálogo de rol (solo en dron real) ─────────────────────
-        if REAL_DRONE:
-            mostrar_dialogo_rol(IS_GROUND_STATION)
+        # ── Negociación de rol (dron real Y simulación con múltiples instancias) ─
+        # El mecanismo es el mismo en ambos casos: retain MQTT para elegir quién
+        # arranca el AutopilotService. Sin esto, dos instancias en simulación
+        # colisionarían con el mismo client_id "autopilotServiceDemo".
+        print("[ROL] Negociando rol Estación de Tierra vs Cliente...")
+        IS_GROUND_STATION = negociar_rol_ground_station()
+        mostrar_dialogo_rol(IS_GROUND_STATION)
 
         # ── Arrancar AutopilotService solo si soy Estación de Tierra ─────────
         if IS_GROUND_STATION:
@@ -1277,12 +1273,10 @@ def crear_ventana(modo):
         _startT  = startTelem_global; _stopT = stopTelem_global
         _heading = changeHeading_global; _speed = changeNavSpeed_global
 
-        # Título indica el rol
-        if REAL_DRONE:
-            rol_tag = "📡 Estación de Tierra" if IS_GROUND_STATION else "📺 Cliente"
-            titulo  = f"Dashboard Dron — Modo Global 🌐  |  {rol_tag}"
-        else:
-            titulo  = "Dashboard Dron — Modo Global 🌐 (Simulación)"
+        # Título indica el rol (siempre, tanto en real como en simulación)
+        sim_tag = " · Sim" if not REAL_DRONE else ""
+        rol_tag = "📡 Estación de Tierra" if IS_GROUND_STATION else "📺 Cliente"
+        titulo  = f"Dashboard Dron — Modo Global 🌐{sim_tag}  |  {rol_tag}"
 
     else:  # local
         IS_GROUND_STATION = True   # en local siempre es la única instancia
@@ -1302,18 +1296,18 @@ def crear_ventana(modo):
     v.columnconfigure(1, weight=1)
     v.rowconfigure(0, weight=1)
 
-    # ── Indicador de rol (visible en barra superior, solo global + real) ──────
-    if modo == "global" and REAL_DRONE:
-        rol_bg     = "#1b4d2e" if IS_GROUND_STATION else "#1a2a4a"
-        rol_fg     = "#2ecc71" if IS_GROUND_STATION else "#3498db"
-        rol_texto  = "📡  ESTACIÓN DE TIERRA  — AutopilotService activo" \
-                     if IS_GROUND_STATION else \
-                     "📺  CLIENTE  — AutopilotService gestionado por otra consola"
+    # ── Indicador de rol (visible en barra superior en modo global) ──────────
+    if modo == "global":
+        rol_bg    = "#1b4d2e" if IS_GROUND_STATION else "#1a2a4a"
+        rol_fg    = "#2ecc71" if IS_GROUND_STATION else "#3498db"
+        sim_tag   = " (Simulación)" if not REAL_DRONE else ""
+        rol_texto = f"📡  ESTACIÓN DE TIERRA{sim_tag}  — AutopilotService activo" \
+                    if IS_GROUND_STATION else \
+                    f"📺  CLIENTE{sim_tag}  — AutopilotService gestionado por otra consola"
         banner = tk.Frame(v, bg=rol_bg, height=28)
         banner.grid(row=0, column=0, columnspan=2, sticky="ew")
         tk.Label(banner, text=rol_texto, font=("Arial", 9, "bold"),
                  bg=rol_bg, fg=rol_fg).pack(pady=4)
-        # Desplazar controles y mapa a la fila 1
         v.rowconfigure(0, weight=0)
         v.rowconfigure(1, weight=1)
         ctrl_row = 1; map_row = 1
@@ -1431,12 +1425,14 @@ def crear_ventana(modo):
     v.geometry("950x750")
 
     # ── Liberar recursos al cerrar ────────────────────────────────────────────
-    if modo == "global" and REAL_DRONE and IS_GROUND_STATION:
-        # Estación de Tierra: libera claim Y slot
+    # atexit ya gestiona liberar_slot y limpiar_claim en Ctrl+C o crash,
+    # pero WM_DELETE_WINDOW garantiza la limpieza en cierre normal de ventana.
+    if modo == "global" and IS_GROUND_STATION:
+        # Estación de Tierra (real o simulación): libera claim Y slot
         v.protocol("WM_DELETE_WINDOW",
                    lambda: (limpiar_claim_ground_station(), liberar_slot(), v.destroy()))
     elif modo == "global":
-        # Cliente (o simulación global): solo libera el slot
+        # Cliente (real o simulación): solo libera el slot
         v.protocol("WM_DELETE_WINDOW",
                    lambda: (liberar_slot(), v.destroy()))
 
