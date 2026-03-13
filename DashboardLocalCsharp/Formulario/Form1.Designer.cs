@@ -573,6 +573,21 @@
             this.Load += new System.EventHandler(this.Form1_Load);
             ((System.ComponentModel.ISupportInitialize)(this.headingTrackBar)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.velocidadTrackBar)).EndInit();
+
+
+
+
+            // comboPuerto
+            this.comboPuerto = new System.Windows.Forms.ComboBox();
+            this.comboPuerto.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
+            this.comboPuerto.Font = new System.Drawing.Font("Microsoft Sans Serif", 10F);
+            this.comboPuerto.Location = new System.Drawing.Point(6, 155);
+            this.comboPuerto.Name = "comboPuerto";
+            this.comboPuerto.Size = new System.Drawing.Size(203, 24);
+            this.comboPuerto.TabIndex = 41;
+            this.groupBox1.Controls.Add(this.comboPuerto);
+
+
             this.groupBox4.ResumeLayout(false);
             this.groupBox4.PerformLayout();
             this.groupBox2.ResumeLayout(false);
@@ -631,6 +646,10 @@
         private System.Windows.Forms.Label label11;
         private System.Windows.Forms.Label label10;
         private System.Windows.Forms.Label label8;
+
+
+        private System.Windows.Forms.ComboBox comboPuerto;
+
     }
 }
 

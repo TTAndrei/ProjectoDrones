@@ -23,3 +23,15 @@ C:\Users\arnau\source\repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formula
 C:\Users\arnau\source\repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Formulario.pdb
 C:\Users\arnau\source\repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\csDronLink.dll
 C:\Users\arnau\source\repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\obj\Debug\Formulario.csproj.Up2Date
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\obj\Debug\Formulario.csproj.AssemblyReference.cache
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\obj\Debug\Formulario.Form1.resources
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\obj\Debug\Formulario.Properties.Resources.resources
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\obj\Debug\Formulario.csproj.GenerateResource.cache
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\obj\Debug\Formulario.csproj.CoreCompileInputs.cache
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\obj\Debug\Formulario.exe
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\obj\Debug\Formulario.pdb
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Formulario.exe.config
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Formulario.exe
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Formulario.pdb
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\csDronLink.dll
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\obj\Debug\Formulario.csproj.Up2Date

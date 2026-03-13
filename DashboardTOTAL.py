@@ -41,10 +41,12 @@ PASS_DASHBOARD    = "Kb2avDJmV2aj!Jz"
 T_OFFER  = "webrtc/offer"
 T_ANSWER = "webrtc/answer"
 
+# Topic con retain=True para negociar quién es la Estación de Tierra
+T_AUTOPILOT_CLAIM = "autopilot/claim"
+
 METERED_API = "https://testconection1.metered.live/api/v1/turn/credentials?apiKey=57312a00508de97f6ca0758cce3935fe7670"
 
 # ── AutopilotService / MQTT ───────────────────────────────────────────────────
-# Credenciales propias del servicio de autopiloto — distintas a las del dashboard
 USER_AUTOPILOT = "autopilotServiceDemo"
 PASS_AUTOPILOT = "qkdb!LasqvHfy9V"
 
@@ -56,15 +58,16 @@ TCP_PORT = 9999
 #  ESTADO GLOBAL
 # ══════════════════════════════════════════════════════════════════════════════
 
-pc            = None   # RTCPeerConnection del dashboard (receptor de vídeo)
-loop_dashboard = None  # event loop asyncio del hilo WebRTC del dashboard
-client_dashboard = None   # cliente MQTT del dashboard
-pending_offer = None   # offer recibida antes de pulsar el botón de vídeo
+pc            = None
+loop_dashboard = None
+client_dashboard = None
+pending_offer = None
 previousBtn   = None
 MODE          = None   # "global" o "local"
-REAL_DRONE    = False  # si True se conecta a COM3/57600 en modo local, si False usa el TCP de simulación
+REAL_DRONE    = False
+IS_GROUND_STATION = False   # True si esta instancia es la Estación de Tierra
 
-dron          = Dron() # instancia del dron — compartida entre autopiloto y dashboard local
+dron          = Dron()
 
 altShowLbl = headingShowLbl = stateShowLbl = None
 speedShowLbl = battShowLbl = gpsShowLbl = None
@@ -72,14 +75,14 @@ connectBtn = arm_takeOffBtn = landBtn = RTLBtn = None
 speedSldr  = gradesSldr = None
 
 # ── Mapa ──────────────────────────────────────────────────────────────────────
-map_widget     = None   # widget tkintermapview
-drone_marker   = None   # marcador del dron en el mapa
-target_marker  = None   # marcador del destino (al hacer clic)
-drone_path     = []     # lista de (lat, lon) para trazar la ruta
-drone_path_line = None  # línea de ruta en el mapa
-drone_lat      = None   # última latitud conocida del dron
-drone_lon      = None   # última longitud conocida del dron
-_goto_callback = None   # función go_to_gps según el modo (global/local)
+map_widget      = None
+drone_marker    = None
+target_marker   = None
+drone_path      = []
+drone_path_line = None
+drone_lat       = None
+drone_lon       = None
+_goto_callback  = None
 
 # YOLOv5
 detect_object_id = None
@@ -91,7 +94,6 @@ yolo_model       = None
 # ══════════════════════════════════════════════════════════════════════════════
 
 def selector_simulacion():
-    """Ventana inicial que pregunta si se usará simulación o dron real."""
     seleccion = {"valor": None}
 
     sel = tk.Tk()
@@ -139,7 +141,6 @@ def selector_simulacion():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def selector_modo():
-    """Ventana inicial para elegir entre Modo Global y Modo Local."""
     modo_elegido = {"valor": None}
 
     sel = tk.Tk()
@@ -164,7 +165,6 @@ def selector_modo():
         modo_elegido["valor"] = modo
         sel.destroy()
 
-    # Modo Global
     f_global = tk.Frame(btn_frame, bg="#212121")
     f_global.pack(fill="x", pady=6, ipady=2)
     tk.Button(f_global, text="Modo Global",
@@ -174,7 +174,6 @@ def selector_modo():
     tk.Label(f_global, text="MQTT + WebRTC + TURN",
              font=("Arial", 8), bg="#212121", fg="#aaaaaa").pack(pady=(0, 4))
 
-    # Modo Local
     f_local = tk.Frame(btn_frame, bg="#212121")
     f_local.pack(fill="x", pady=6, ipady=2)
     tk.Button(f_local, text="Modo Local",
@@ -193,56 +192,202 @@ def selector_modo():
     return modo_elegido["valor"]
 
 
-# ── Asignar MODE global al arrancar ──────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  NEGOCIACIÓN DE ROL — Estación de Tierra vs Cliente
+#  Solo aplica en modo Global + Dron Real.
+#
+#  Protocolo:
+#    1. Se abre un cliente MQTT temporal y se suscribe a T_AUTOPILOT_CLAIM.
+#    2. Se espera 1.5 s para recibir el mensaje retain (si lo hay).
+#    3. Si llega un claim de otro → ya hay una Estación de Tierra → soy Cliente.
+#    4. Si no llega nada → soy el primero → me proclamo Estación de Tierra
+#       publicando mi client_id con retain=True.
+#    5. Si yo mismo publiqué el claim anterior (mismo client_id) lo ignoro —
+#       reinicio del proceso con la misma instancia.
+# ══════════════════════════════════════════════════════════════════════════════
+
+MY_CLIENT_ID = f"Dashboard_{int(time.time())}"   # ID único por arranque
+
+def negociar_rol_ground_station():
+    """Determina si esta instancia debe actuar como Estación de Tierra.
+
+    Retorna True  → soy Estación de Tierra (arranco AutopilotService).
+    Retorna False → soy Cliente (no arranco AutopilotService).
+
+    Solo se llama cuando MODE=="global" y REAL_DRONE==True.
+    """
+    resultado = {"claim_recibido": None, "evento": threading.Event()}
+
+    def _on_message(cli, userdata, msg):
+        if msg.topic == T_AUTOPILOT_CLAIM:
+            payload = msg.payload.decode("utf-8").strip()
+            # Ignorar claim propio (reinicio de la misma instancia)
+            if payload and payload != MY_CLIENT_ID:
+                resultado["claim_recibido"] = payload
+            resultado["evento"].set()
+
+    # Cliente temporal solo para negociación
+    tmp = mqtt.Client(client_id=MY_CLIENT_ID + "_probe", transport="websockets")
+    tmp.ws_set_options(path="/mqtt")
+    tmp.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
+    tmp.username_pw_set(USER_DASHBOARD, PASS_DASHBOARD)
+    tmp.on_message = _on_message
+    tmp.connect(BROKER_DASHBOARD, PORT)
+    tmp.subscribe(T_AUTOPILOT_CLAIM)
+    tmp.loop_start()
+
+    # Esperar hasta 1.5 s por un retain existente
+    resultado["evento"].wait(timeout=1.5)
+    tmp.loop_stop()
+    tmp.disconnect()
+
+    if resultado["claim_recibido"]:
+        # Ya hay otra Estación de Tierra activa
+        print(f"[ROL] Estación de Tierra detectada: {resultado['claim_recibido']}")
+        return False
+    else:
+        # Soy el primero — publicar claim con retain=True para que los demás me vean
+        _publicar_claim()
+        print(f"[ROL] Me proclamo Estación de Tierra ({MY_CLIENT_ID})")
+        return True
+
+
+def _publicar_claim():
+    """Publica el claim de Estación de Tierra con retain=True.
+    Lo hace un cliente independiente para no interferir con el dashboard."""
+    claim_client = mqtt.Client(client_id=MY_CLIENT_ID + "_claim", transport="websockets")
+    claim_client.ws_set_options(path="/mqtt")
+    claim_client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
+    claim_client.username_pw_set(USER_DASHBOARD, PASS_DASHBOARD)
+    claim_client.connect(BROKER_DASHBOARD, PORT)
+    claim_client.loop_start()
+    time.sleep(0.3)  # esperar conexión
+    claim_client.publish(T_AUTOPILOT_CLAIM, MY_CLIENT_ID, retain=True, qos=1)
+    time.sleep(0.3)  # esperar que el broker confirme
+    # No desconectar — el retain persiste en el broker aunque el cliente se vaya
+
+
+def limpiar_claim_ground_station():
+    """Borra el claim retain al cerrar la Estación de Tierra.
+    Publica payload vacío en el topic retain — el broker elimina el retain."""
+    try:
+        c = mqtt.Client(client_id=MY_CLIENT_ID + "_cleanup", transport="websockets")
+        c.ws_set_options(path="/mqtt")
+        c.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
+        c.username_pw_set(USER_DASHBOARD, PASS_DASHBOARD)
+        c.connect(BROKER_DASHBOARD, PORT)
+        c.loop_start()
+        time.sleep(0.3)
+        c.publish(T_AUTOPILOT_CLAIM, "", retain=True, qos=1)  # vacío = borrar retain
+        time.sleep(0.3)
+        c.loop_stop()
+        c.disconnect()
+        print("[ROL] Claim liberado — el próximo en arrancar será Estación de Tierra")
+    except Exception as e:
+        print(f"[ROL] Error limpiando claim: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DIÁLOGO DE ROL — informa al usuario qué rol tiene esta instancia
+# ══════════════════════════════════════════════════════════════════════════════
+
+def mostrar_dialogo_rol(es_estacion):
+    """Muestra una ventana modal que informa del rol asignado.
+
+    Estación de Tierra → verde oscuro, icono 📡
+    Cliente            → azul oscuro, icono 📺
+    """
+    d = tk.Tk()
+    d.title("Rol asignado")
+    d.resizable(False, False)
+
+    if es_estacion:
+        bg_color   = "#1b4d2e"
+        accent     = "#2ecc71"
+        icono      = "📡"
+        titulo_rol = "ESTACIÓN DE TIERRA"
+        desc       = ("Esta instancia controla el AutopilotService.\n"
+                      "El dron está conectado directamente a este equipo.\n"
+                      "Otras consolas en la red actuarán como Clientes.")
+    else:
+        bg_color   = "#1a2a4a"
+        accent     = "#3498db"
+        icono      = "📺"
+        titulo_rol = "CLIENTE"
+        desc       = ("Ya existe una Estación de Tierra activa en la red.\n"
+                      "Esta consola solo enviará comandos y recibirá telemetría.\n"
+                      "El AutopilotService NO se ha iniciado aquí.")
+
+    d.configure(bg=bg_color)
+
+    w, h = 480, 300
+    x = (d.winfo_screenwidth()  - w) // 2
+    y = (d.winfo_screenheight() - h) // 2
+    d.geometry(f"{w}x{h}+{x}+{y}")
+
+    # Franja superior con color de acento
+    franja = tk.Frame(d, bg=accent, height=5)
+    franja.pack(fill="x")
+
+    # Icono grande
+    tk.Label(d, text=icono, font=("Arial", 42), bg=bg_color, fg=accent
+             ).pack(pady=(18, 4))
+
+    # Título del rol
+    tk.Label(d, text=titulo_rol, font=("Arial", 16, "bold"), bg=bg_color, fg=accent
+             ).pack(pady=(0, 8))
+
+    # Descripción
+    tk.Label(d, text=desc, font=("Arial", 9), bg=bg_color, fg="#cccccc",
+             justify="center", wraplength=420).pack(pady=(0, 20))
+
+    # Botón continuar
+    tk.Button(d, text="Continuar →",
+              font=("Arial", 11, "bold"), bg=accent, fg="white",
+              activebackground=bg_color, relief="flat", cursor="hand2",
+              padx=24, pady=8, command=d.destroy).pack()
+
+    # Cerrar automáticamente tras 6 s si el usuario no pulsa
+    d.after(6000, lambda: d.destroy() if d.winfo_exists() else None)
+
+    d.protocol("WM_DELETE_WINDOW", d.destroy)
+    d.mainloop()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  AUTOPILOT SERVICE (integrado)
-#  Escucha comandos MQTT y los traduce a llamadas dronLink.
-#  En modo global corre en su propio hilo con su propio cliente MQTT.
-#  En modo local el dashboard habla directamente con dronLink.
 # ══════════════════════════════════════════════════════════════════════════════
 
-autopilot_sending_topic = None  # topic de respuesta, se construye por mensaje
-client_autopilot        = None  # cliente MQTT del autopiloto (distinto al del dashboard)
+autopilot_sending_topic = None
+client_autopilot        = None
 
 
 def autopilot_publish_event(event):
-    """Publica un evento de estado de vuelta al dashboard que originó el comando."""
     client_autopilot.publish(autopilot_sending_topic + '/' + event)
     print(f"[AUTOPILOT] → {autopilot_sending_topic}/{event}")
 
 
 def autopilot_publish_telemetry(telemetry_info):
-    """Publica datos de telemetría en tiempo real."""
     client_autopilot.publish(autopilot_sending_topic + '/telemetryInfo',
                               json.dumps(telemetry_info))
 
 
 def autopilot_on_message(cli, userdata, message):
-    """Procesa los comandos que llegan del dashboard via MQTT.
-
-    Topic format:  <origen>/autopilotServiceDemo/<comando>
-    Ejemplo:       interfazGlobal/autopilotServiceDemo/arm_takeOff
-    """
     global autopilot_sending_topic
 
     parts   = message.topic.split("/")
-    origin  = parts[0]   # quién envió el comando
-    command = parts[2]   # qué hay que hacer
+    origin  = parts[0]
+    command = parts[2]
 
     autopilot_sending_topic = "autopilotServiceDemo/" + origin
     print(f"[AUTOPILOT] {origin} → {command}")
 
     if command == 'connect':
-        # decide between simulator and real drone based on payload
-        # el dashboard publica solo el topic o bien incluye "REAL" como payload
         payload = message.payload.decode("utf-8").strip()
         if payload == 'REAL':
             connection_string = 'COM3'
             baud = 57600
         else:
-            # por defecto conectarse al simulador TCP
             connection_string = 'tcp:127.0.0.1:5763'
             baud = 115200
         dron.connect(connection_string, baud, freq=10)
@@ -283,9 +428,6 @@ def autopilot_on_message(cli, userdata, message):
         dron.changeNavSpeed(float(message.payload.decode("utf-8")))
 
     elif command == 'goto':
-        # Payload: {"lat": float, "lon": float, "alt": float}
-        # dronLink.goto() navega al punto GPS con la altitud indicada.
-        # blocking=False para no bloquear el hilo MQTT mientras el dron viaja.
         coords = json.loads(message.payload.decode("utf-8"))
         dron.goto(coords["lat"], coords["lon"], coords.get("alt", 5.0),
                   blocking=False)
@@ -298,7 +440,7 @@ def autopilot_on_connect(cli, userdata, flags, rc):
 
 def start_autopilot_service():
     """Arranca el AutopilotService en su propio hilo.
-    Usa un cliente MQTT separado con credenciales propias del servicio.
+    Solo se llama si IS_GROUND_STATION == True.
     """
     global client_autopilot
 
@@ -313,7 +455,6 @@ def start_autopilot_service():
         client_autopilot.on_connect = autopilot_on_connect
         client_autopilot.on_message = autopilot_on_message
         client_autopilot.connect(BROKER_DASHBOARD, PORT)
-        # Escuchar comandos de cualquier origen dirigidos a este servicio
         client_autopilot.subscribe('+/autopilotServiceDemo/#')
         print("[AUTOPILOT] Servicio listo — esperando comandos")
         client_autopilot.loop_forever()
@@ -323,16 +464,9 @@ def start_autopilot_service():
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  CAMERA SERVICE (integrado)
-#  Captura la webcam y emite el stream por WebRTC.
-#  Señalización via MQTT (modo global) o TCP (modo local).
 # ══════════════════════════════════════════════════════════════════════════════
 
 class CameraTrack(VideoStreamTrack):
-    """Track de vídeo que captura frames de la webcam para enviarlos por WebRTC.
-
-    Usa fractions.Fraction(1, 30) para time_base — compatible con aiortc y
-    con el formato original del camera_service independiente.
-    """
     def __init__(self):
         super().__init__()
         import fractions
@@ -357,8 +491,6 @@ class CameraTrack(VideoStreamTrack):
 
 
 def get_ice_config():
-    """Obtiene servidores ICE (STUN + TURN) desde Metered.
-    Sin TURN solo funciona en LAN; con TURN funciona en cualquier red."""
     print("[ICE] Obteniendo credenciales TURN de Metered...")
     try:
         servers = requests.get(METERED_API, timeout=10).json()
@@ -380,8 +512,6 @@ def get_ice_config():
 
 
 def _silence_aioice_handler(loop, context):
-    """Handler que silencia errores internos de aioice TURN (CHANNEL_BIND 401).
-    No afectan al funcionamiento — el vídeo sigue llegando por relay."""
     exc = context.get("exception", None)
     msg = context.get("message", "")
     if "TransactionFailed" in str(type(exc).__name__) or "aioice" in str(exc):
@@ -392,20 +522,14 @@ def _silence_aioice_handler(loop, context):
 
 
 async def run_camera_global(mqtt_cam_client):
-    """Crea la conexión WebRTC del emisor (camera) y publica la offer via MQTT."""
     pc_cam = RTCPeerConnection(configuration=get_ice_config())
     pc_cam.addTrack(CameraTrack())
 
     @pc_cam.on("connectionstatechange")
     async def _(): print(f"[CAM] WebRTC {pc_cam.connectionState}")
 
-    # Evento para recibir la answer del dashboard
     answer_event = asyncio.Event()
     answer_data  = {}
-
-    # Capturamos el loop AQUÍ, dentro de la corrutina asyncio donde sí existe.
-    # on_answer se ejecutará en el hilo MQTT que no tiene loop propio —
-    # por eso hay que pasárselo explícitamente via run_coroutine_threadsafe.
     cam_loop = asyncio.get_event_loop()
 
     def on_answer(cli, userdata, msg):
@@ -413,13 +537,12 @@ async def run_camera_global(mqtt_cam_client):
             answer_data["sdp"] = json.loads(msg.payload)
             asyncio.run_coroutine_threadsafe(
                 _apply_answer(pc_cam, answer_data["sdp"], answer_event),
-                cam_loop   # loop capturado desde el contexto asyncio correcto
+                cam_loop
             )
 
     mqtt_cam_client.on_message = on_answer
     mqtt_cam_client.subscribe(T_ANSWER)
 
-    # Crear offer y esperar ICE gathering completo
     await pc_cam.setLocalDescription(await pc_cam.createOffer())
     print("[CAM] Esperando ICE gathering...")
     while pc_cam.iceGatheringState != "complete":
@@ -430,14 +553,13 @@ async def run_camera_global(mqtt_cam_client):
     has_relay = any("relay" in c for c in candidates)
     print(f"[CAM] {len(candidates)} candidates — {'✓ relay presente' if has_relay else '⚠ sin relay'}")
 
-    # Publicar offer con retain=True — el dashboard la recibe aunque arranque después
     mqtt_cam_client.publish(T_OFFER, json.dumps({
         "sdp":  pc_cam.localDescription.sdp,
         "type": pc_cam.localDescription.type,
     }), retain=True)
     print("[CAM] Offer publicada — esperando answer del dashboard...")
 
-    await answer_event.wait()  # bloquear hasta recibir la answer
+    await answer_event.wait()
     print("[CAM] Conexión establecida ✓")
 
     try:
@@ -456,9 +578,7 @@ async def _apply_answer(pc_cam, data, event):
 
 
 def start_camera_service_global():
-    """Arranca el CameraService en modo global en su propio hilo asyncio."""
     def _run():
-        # Cliente MQTT propio para el camera service
         cam_client = mqtt.Client(client_id="CameraService", transport="websockets")
         cam_client.ws_set_options(path="/mqtt")
         cam_client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
@@ -476,17 +596,9 @@ def start_camera_service_global():
 
 
 async def run_camera_local():
-    """CameraService en modo local — actúa de SERVIDOR TCP.
-
-    El emisor abre el socket y espera a que el dashboard (cliente) se conecte.
-    Una vez conectado, crea la offer, la envía por TCP y espera la answer.
-    La señalización TCP usa TcpSocketSignaling de aiortc — no necesita MQTT ni TURN.
-    """
     import fractions
     from aiortc.contrib.signaling import TcpSocketSignaling
 
-    # "0.0.0.0" = escuchar en todas las interfaces del PC
-    # El dashboard se conectará a TCP_HOST:TCP_PORT como cliente
     signaling = TcpSocketSignaling("0.0.0.0", TCP_PORT)
     pc_cam    = RTCPeerConnection()
     pc_cam.addTrack(CameraTrack())
@@ -496,15 +608,13 @@ async def run_camera_local():
 
     try:
         print(f"[CAM] Esperando cliente en 0.0.0.0:{TCP_PORT}...")
-        await signaling.connect()   # bloquea hasta que el dashboard se conecta
+        await signaling.connect()
 
-        # Crear y enviar offer al dashboard
         offer = await pc_cam.createOffer()
         await pc_cam.setLocalDescription(offer)
         await signaling.send(pc_cam.localDescription)
         print("[CAM] Offer enviada — esperando answer...")
 
-        # Esperar la answer del dashboard
         while True:
             obj = await signaling.receive()
             if isinstance(obj, RTCSessionDescription):
@@ -515,7 +625,6 @@ async def run_camera_local():
                 print("[CAM] Fallo en la coordinación TCP")
                 break
 
-        # Mantener la conexión activa
         while pc_cam.connectionState not in ("failed", "closed"):
             await asyncio.sleep(1)
 
@@ -526,7 +635,6 @@ async def run_camera_local():
 
 
 def start_camera_service_local():
-    """Arranca el CameraService local en su propio hilo asyncio."""
     def _run():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -537,11 +645,10 @@ def start_camera_service_local():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  DETECCIÓN YOLO (compartida entre modos)
+#  DETECCIÓN YOLO
 # ══════════════════════════════════════════════════════════════════════════════
 
 def load_yolo():
-    """Carga YOLOv5s en memoria (solo la primera vez, en hilo separado)."""
     global yolo_model
     if yolo_model is None:
         print("[DET] Cargando YOLOv5...")
@@ -557,7 +664,6 @@ def set_detect(obj_id):
     print(f"[DET] Detectando objeto ID={obj_id}")
 
 def run_detect(frame):
-    """Inferencia YOLO en executor — no bloquea el event loop asyncio."""
     if yolo_model is None or detect_object_id is None:
         return []
     with warnings.catch_warnings():
@@ -572,7 +678,6 @@ def run_detect(frame):
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def show_video(track):
-    """Recibe frames WebRTC y los muestra. YOLO cada 30 frames en executor."""
     print("[VIDEO] Mostrando frames...")
     frame_count, last_boxes = 0, []
 
@@ -601,7 +706,6 @@ async def show_video(track):
 
 
 def webrtc_thread_dashboard():
-    """Hilo asyncio del dashboard — modo GLOBAL: espera offer via MQTT."""
     global pc, loop_dashboard, pending_offer
 
     loop_dashboard = asyncio.new_event_loop()
@@ -632,26 +736,18 @@ def webrtc_thread_dashboard():
 
 
 async def webrtc_receive_local():
-    """Modo LOCAL: replica exactamente el videoReceiver() del dashboard original.
-
-    El dashboard actúa de CLIENTE TCP — se conecta al CameraService que
-    hace de servidor. No usa MQTT, no usa TURN, no usa ICE de Metered.
-    Solo TcpSocketSignaling + RTCPeerConnection() básico, igual que el original.
-    """
     from aiortc.contrib.signaling import TcpSocketSignaling
     from aiortc import MediaStreamTrack
 
-    # Pequeña espera para asegurar que el servidor TCP del CameraService está listo
     await asyncio.sleep(0.8)
 
     signaling = TcpSocketSignaling(TCP_HOST, TCP_PORT)
-    pc_local  = RTCPeerConnection()  # SIN ICE config — conexión local pura
+    pc_local  = RTCPeerConnection()
 
     @pc_local.on("track")
     def on_track(track):
         if isinstance(track, MediaStreamTrack) and track.kind == "video":
             print("[VIDEO] ✓ Track recibido (local)")
-            # ensure_future como en el original — no run_coroutine_threadsafe
             asyncio.ensure_future(show_video_local(track))
 
     @pc_local.on("connectionstatechange")
@@ -662,7 +758,6 @@ async def webrtc_receive_local():
         print(f"[VIDEO] Conectando al CameraService en {TCP_HOST}:{TCP_PORT}...")
         await signaling.connect()
 
-        # Recibir offer del CameraService (servidor TCP)
         print("[VIDEO] Esperando offer...")
         offer = await signaling.receive()
         print("[VIDEO] Offer recibida")
@@ -673,12 +768,10 @@ async def webrtc_receive_local():
         await signaling.send(pc_local.localDescription)
         print("[VIDEO] Answer enviada — esperando conexión...")
 
-        # Esperar a que se establezca la conexión (igual que el original)
         while pc_local.connectionState != "connected":
             await asyncio.sleep(0.1)
         print("[VIDEO] Conexión establecida ✓")
 
-        # Mantener activo
         while pc_local.connectionState not in ("failed", "closed"):
             await asyncio.sleep(1)
 
@@ -689,8 +782,6 @@ async def webrtc_receive_local():
 
 
 async def show_video_local(track):
-    """Muestra vídeo en modo local — misma lógica que show_video pero
-    usando una pc_local independiente, sin referenciar la pc global."""
     print("[VIDEO] Mostrando frames (local)...")
     frame_count, last_boxes = 0, []
 
@@ -719,8 +810,6 @@ async def show_video_local(track):
 
 
 def webrtc_thread_dashboard_local():
-    """Hilo asyncio del dashboard — modo LOCAL.
-    Crea su propio event loop limpio, sin nada de ICE/TURN/MQTT."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -730,7 +819,6 @@ def webrtc_thread_dashboard_local():
 
 
 async def handle_offer_dashboard(data):
-    """Procesa la offer del CameraService y responde con answer via MQTT."""
     await pc.setRemoteDescription(
         RTCSessionDescription(sdp=data["sdp"], type=data["type"])
     )
@@ -761,7 +849,6 @@ def start_webrtc_dashboard():
 
 
 def on_mqtt_message_dashboard(cli, userdata, msg):
-    """Callback MQTT del dashboard: gestiona señalización WebRTC y telemetría."""
     global pending_offer
     topic = msg.topic
     try:
@@ -803,22 +890,14 @@ def on_mqtt_message_dashboard(cli, userdata, msg):
         threading.Thread(target=lambda: (time.sleep(5), _reset_btns()), daemon=True).start()
 
 
-
 # ══════════════════════════════════════════════════════════════════════════════
-#  MAPA — lógica compartida entre ambos modos
+#  MAPA
 # ══════════════════════════════════════════════════════════════════════════════
 
-DEFAULT_LAT = 41.3851   # Barcelona — posición inicial si el dron aún no reporta GPS
+DEFAULT_LAT = 41.3851
 DEFAULT_LON =  2.1734
 
 def update_map(lat, lon):
-    """Actualiza la posición del dron en el mapa.
-
-    Llamada cada vez que llegan datos de telemetría con lat/lon.
-    Mueve el marcador y añade el punto a la ruta trazada.
-    Se llama desde el hilo MQTT (global) o dronLink (local) —
-    usa after() para actualizar el widget Tkinter desde el hilo principal.
-    """
     global drone_marker, drone_path, drone_path_line, drone_lat, drone_lon
 
     drone_lat, drone_lon = lat, lon
@@ -828,52 +907,37 @@ def update_map(lat, lon):
         global drone_marker, drone_path_line
         if map_widget is None:
             return
-        # Mover o crear el marcador del dron
         if drone_marker is None:
             drone_marker = map_widget.set_marker(
-                lat, lon,
-                text="🚁 Dron",
+                lat, lon, text="🚁 Dron",
                 marker_color_circle="red",
                 marker_color_outside="darkred"
             )
         else:
             drone_marker.set_position(lat, lon)
 
-        # Centrar el mapa en el dron (solo si está lejos del centro visible)
         drone_marker.set_position(lat, lon)
 
-        # Actualizar la línea de ruta
         if len(drone_path) >= 2:
             if drone_path_line:
                 drone_path_line.delete()
             drone_path_line = map_widget.set_path(
-                drone_path[-200:],  # últimos 200 puntos para no saturar
-                color="dodger blue",
-                width=2
-            )
+                drone_path[-200:], color="dodger blue", width=2)
 
-    # Tkinter no es thread-safe — usar after(0, ...) para ejecutar en el hilo principal
     if map_widget:
         map_widget.after(0, _update)
 
 
 def on_map_click(coords):
-    """Callback al hacer clic en el mapa.
-
-    Coloca un marcador de destino y envía al dron las coordenadas GPS
-    usando el comando go_to_gps del dronLink o via MQTT según el modo.
-    """
     global target_marker
     lat, lon = coords
 
-    # Marcador de destino
     def _mark():
         global target_marker
         if target_marker:
             target_marker.delete()
         target_marker = map_widget.set_marker(
-            lat, lon,
-            text="📍 Destino",
+            lat, lon, text="📍 Destino",
             marker_color_circle="green",
             marker_color_outside="darkgreen"
         )
@@ -881,20 +945,12 @@ def on_map_click(coords):
     if map_widget:
         map_widget.after(0, _mark)
 
-    # Enviar al dron
     if _goto_callback:
         _goto_callback(lat, lon)
     print(f"[MAP] Ir a → lat={lat:.6f}, lon={lon:.6f}")
 
 
-# ── Callbacks go_to_gps según modo ───────────────────────────────────────────
-
 def goto_gps_global(lat, lon):
-    """Envía el comando goto al dron via MQTT.
-
-    El AutopilotService recibirá lat, lon y alt y llamará a dron.goto().
-    La altitud se lee de la label de telemetría para mantener la altitud actual.
-    """
     if client_dashboard:
         try:
             alt_str = altShowLbl['text'].replace(' m', '').strip()
@@ -908,16 +964,7 @@ def goto_gps_global(lat, lon):
 
 
 def goto_gps_local(lat, lon):
-    """Navega al punto GPS indicado via dronLink.
-
-    Usa dron.goto(lat, lon, alt) — la altitud se toma de la última
-    telemetría recibida para mantener la altitud de vuelo actual.
-    Si aún no hay telemetría, usa 5 m como valor por defecto.
-    blocking=False para no bloquear el hilo de la GUI.
-    """
     try:
-        alt = drone_lat and drone_lon  # reutilizamos la alt de telemetría
-        # Obtener la altitud actual del dron desde la label si está disponible
         try:
             alt_str = altShowLbl['text'].replace(' m', '').strip()
             alt = float(alt_str) if alt_str else 5.0
@@ -928,6 +975,7 @@ def goto_gps_local(lat, lon):
     except Exception as e:
         print(f"[MAP] Error goto: {e}")
 
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  CONTROL DEL DRON
 # ══════════════════════════════════════════════════════════════════════════════
@@ -936,7 +984,6 @@ def _reset_btns():
     for b, t in [(arm_takeOffBtn,'Armar'),(landBtn,'Aterrizar'),(RTLBtn,'RTL')]:
         b.configure(text=t, fg='black', bg='dark orange')
 
-# Modo Global — publica comandos MQTT que recibe el AutopilotService integrado
 def connect_global():
     if REAL_DRONE == False:
         client_dashboard.publish('interfazGlobal/autopilotServiceDemo/connect')
@@ -969,7 +1016,6 @@ def stopTelem_global():  client_dashboard.publish('interfazGlobal/autopilotServi
 def changeHeading_global(e): client_dashboard.publish('interfazGlobal/autopilotServiceDemo/changeHeading', str(gradesSldr.get()))
 def changeNavSpeed_global(e): client_dashboard.publish('interfazGlobal/autopilotServiceDemo/changeNavSpeed', str(speedSldr.get()))
 
-# Modo Local — habla directamente con dronLink
 def connect_local():
     if REAL_DRONE == False:
         dron.connect('tcp:127.0.0.1:5763', 115200)
@@ -1025,16 +1071,34 @@ def changeNavSpeed_local(e): dron.changeNavSpeed(float(speedSldr.get()))
 # ══════════════════════════════════════════════════════════════════════════════
 
 def crear_ventana(modo):
-    global client_dashboard
+    global client_dashboard, IS_GROUND_STATION
     global altShowLbl, headingShowLbl, stateShowLbl
     global speedShowLbl, battShowLbl, gpsShowLbl
     global connectBtn, arm_takeOffBtn, landBtn, RTLBtn
     global speedSldr, gradesSldr, previousBtn
 
     if modo == "global":
-        # ── Arrancar servicios integrados ─────────────────────────────────────
-        start_autopilot_service()    # AutopilotService en su hilo
-        start_camera_service_global() # CameraService en su hilo
+        # ── Negociación de rol (solo en modo global + dron real) ──────────────
+        if REAL_DRONE:
+            print("[ROL] Negociando rol Estación de Tierra vs Cliente...")
+            IS_GROUND_STATION = negociar_rol_ground_station()
+        else:
+            # En simulación siempre arranca el AutopilotService localmente
+            IS_GROUND_STATION = True
+
+        # ── Mostrar diálogo de rol (solo en dron real) ─────────────────────
+        if REAL_DRONE:
+            mostrar_dialogo_rol(IS_GROUND_STATION)
+
+        # ── Arrancar AutopilotService solo si soy Estación de Tierra ─────────
+        if IS_GROUND_STATION:
+            start_autopilot_service()
+            print("[MAIN] AutopilotService iniciado (Estación de Tierra)")
+        else:
+            print("[MAIN] AutopilotService omitido (Cliente)")
+
+        # ── Arrancar CameraService siempre (cada consola ve su propia cámara) ─
+        start_camera_service_global()
 
         # ── Cliente MQTT del dashboard ────────────────────────────────────────
         client_dashboard = mqtt.Client(client_id="DashboardGlobal", transport="websockets")
@@ -1053,10 +1117,17 @@ def crear_ventana(modo):
         _go      = go_global;       _video   = start_webrtc_dashboard
         _startT  = startTelem_global; _stopT = stopTelem_global
         _heading = changeHeading_global; _speed = changeNavSpeed_global
-        titulo   = "Dashboard Dron — Modo Global 🌐"
+
+        # Título indica el rol
+        if REAL_DRONE:
+            rol_tag = "📡 Estación de Tierra" if IS_GROUND_STATION else "📺 Cliente"
+            titulo  = f"Dashboard Dron — Modo Global 🌐  |  {rol_tag}"
+        else:
+            titulo  = "Dashboard Dron — Modo Global 🌐 (Simulación)"
 
     else:  # local
-        start_camera_service_local()  # CameraService local en su hilo
+        IS_GROUND_STATION = True   # en local siempre es la única instancia
+        start_camera_service_local()
 
         _connect = connect_local;   _takeoff = takeoff_local
         _land    = land_local;      _RTL     = RTL_local
@@ -1065,18 +1136,34 @@ def crear_ventana(modo):
         _heading = changeHeading_local; _speed = changeNavSpeed_local
         titulo   = "Dashboard Dron — Modo Local 🔌"
 
-    # ── Ventana principal: dos paneles side-by-side ──────────────────────────
-    # Columna 0: controles del dron (ancho fijo ~300px)
-    # Columna 1: mapa tkintermapview (se expande con la ventana)
+    # ── Ventana principal ─────────────────────────────────────────────────────
     v = tk.Tk()
     v.title(titulo)
-    v.columnconfigure(0, weight=0, minsize=310)  # panel controles
-    v.columnconfigure(1, weight=1)               # panel mapa — se expande
+    v.columnconfigure(0, weight=0, minsize=310)
+    v.columnconfigure(1, weight=1)
     v.rowconfigure(0, weight=1)
+
+    # ── Indicador de rol (visible en barra superior, solo global + real) ──────
+    if modo == "global" and REAL_DRONE:
+        rol_bg     = "#1b4d2e" if IS_GROUND_STATION else "#1a2a4a"
+        rol_fg     = "#2ecc71" if IS_GROUND_STATION else "#3498db"
+        rol_texto  = "📡  ESTACIÓN DE TIERRA  — AutopilotService activo" \
+                     if IS_GROUND_STATION else \
+                     "📺  CLIENTE  — AutopilotService gestionado por otra consola"
+        banner = tk.Frame(v, bg=rol_bg, height=28)
+        banner.grid(row=0, column=0, columnspan=2, sticky="ew")
+        tk.Label(banner, text=rol_texto, font=("Arial", 9, "bold"),
+                 bg=rol_bg, fg=rol_fg).pack(pady=4)
+        # Desplazar controles y mapa a la fila 1
+        v.rowconfigure(0, weight=0)
+        v.rowconfigure(1, weight=1)
+        ctrl_row = 1; map_row = 1
+    else:
+        ctrl_row = 0; map_row = 0
 
     # ── Panel izquierdo: controles ────────────────────────────────────────────
     ctrl = tk.Frame(v)
-    ctrl.grid(row=0, column=0, sticky="nsew", padx=(4,2), pady=4)
+    ctrl.grid(row=ctrl_row, column=0, sticky="nsew", padx=(4,2), pady=4)
     for i in range(13): ctrl.rowconfigure(i, weight=1)
     ctrl.columnconfigure(0, weight=1); ctrl.columnconfigure(1, weight=1)
 
@@ -1141,7 +1228,7 @@ def crear_ventana(modo):
     global map_widget, _goto_callback
 
     map_frame = tk.LabelFrame(v, text="Mapa — clic para enviar el dron al punto")
-    map_frame.grid(row=0, column=1, sticky="nsew", padx=(2,4), pady=4)
+    map_frame.grid(row=map_row, column=1, sticky="nsew", padx=(2,4), pady=4)
     map_frame.rowconfigure(0, weight=1)
     map_frame.columnconfigure(0, weight=1)
 
@@ -1149,17 +1236,12 @@ def crear_ventana(modo):
         map_frame, width=600, height=700, corner_radius=4)
     map_widget.grid(row=0, column=0, sticky="nsew")
 
-    # Posición inicial — Barcelona por defecto, se recentrará al llegar GPS
     map_widget.set_position(DEFAULT_LAT, DEFAULT_LON)
     map_widget.set_zoom(15)
-
-    # Registrar el callback de clic al mapa
     map_widget.add_left_click_map_command(on_map_click)
 
-    # Asignar la función go_to_gps correcta según el modo
     _goto_callback = goto_gps_global if modo == "global" else goto_gps_local
 
-    # Botones de control del mapa (zoom + centrar en dron)
     map_ctrl = tk.Frame(map_frame)
     map_ctrl.grid(row=1, column=0, sticky="ew", pady=2)
     map_ctrl.columnconfigure(0, weight=1)
@@ -1187,8 +1269,12 @@ def crear_ventana(modo):
                   "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png")
               ).grid(row=0, column=2, padx=3, pady=3, sticky="ew")
 
-    # Tamaño inicial de la ventana
     v.geometry("950x750")
+
+    # ── Limpiar claim al cerrar la Estación de Tierra ─────────────────────────
+    if modo == "global" and REAL_DRONE and IS_GROUND_STATION:
+        v.protocol("WM_DELETE_WINDOW",
+                   lambda: (limpiar_claim_ground_station(), v.destroy()))
 
     return v
 
@@ -1198,11 +1284,8 @@ def crear_ventana(modo):
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    # primer selector: simulación vs dron real
     REAL_DRONE = selector_simulacion()
-
-    # segundo selector: modo global/local
     modo = selector_modo()
-    MODE = modo   # asignar variable global antes de crear la ventana
+    MODE = modo
     print(f"[MAIN] Simulación={'sí' if not REAL_DRONE else 'no'}, Modo: {modo}")
     crear_ventana(modo).mainloop()
