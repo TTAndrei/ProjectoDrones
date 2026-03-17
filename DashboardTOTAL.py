@@ -44,18 +44,6 @@ METERED_API = "https://testconection1.metered.live/api/v1/turn/credentials?apiKe
 # Rellena nombre y contraseña con los usuarios que hayas creado en HiveMQ.
 # Deja vacío ("") cualquier slot que no hayas creado todavía.
 HIVEMQ_USERS = [
-    {"user": "",  "password": ""},   # slot 1
-    {"user": "",  "password": ""},   # slot 2
-    {"user": "",  "password": ""},   # slot 3
-    {"user": "",  "password": ""},   # slot 4
-]
-
-# ── AutopilotService / MQTT ───────────────────────────────────────────────────
-# Usuario dedicado al AutopilotService — solo lo usa la Estación de Tierra.
-USER_AUTOPILOT = ""   # rellena con el usuario HiveMQ del AutopilotService
-PASS_AUTOPILOT = ""   # rellena con su contraseña
-
-HIVEMQ_USERS = [
     {"user": "InterfazGlobal",  "password": "Kb2avDJmV2aj!Jz"},   # slot 1
     {"user": "Client1",  "password": "GhJpQCxh_ktB4J9"},   # slot 2
     {"user": "Client2",  "password": "GhJpQCxh_ktB4J9"},   # slot 3
@@ -66,7 +54,6 @@ HIVEMQ_USERS = [
 # Usuario dedicado al AutopilotService — solo lo usa la Estación de Tierra.
 USER_AUTOPILOT = "autopilotServiceDemo"   # rellena con el usuario HiveMQ del AutopilotService
 PASS_AUTOPILOT = "qkdb!LasqvHfy9V"   # rellena con su contraseña
-
 
 # ── Topics fijos ──────────────────────────────────────────────────────────────
 T_OFFER  = "webrtc/offer"
@@ -272,6 +259,7 @@ drone_path      = []
 drone_path_line = None
 drone_lat       = None
 drone_lon       = None
+drone_icon       = None
 _goto_callback  = None
 
 # YOLOv5
@@ -1067,22 +1055,43 @@ def on_mqtt_message_dashboard(cli, userdata, msg):
 DEFAULT_LAT = 41.3851
 DEFAULT_LON =  2.1734
 
+def _load_drone_icon():
+    try:
+        import os, io
+        from PIL import Image, ImageTk
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "drone-logo.png")
+        img = Image.open(path).convert("RGBA").resize((36, 36), Image.LANCZOS)
+        return ImageTk.PhotoImage(img)
+    except Exception:
+        return None
+
 def update_map(lat, lon):
-    global drone_marker, drone_path, drone_path_line, drone_lat, drone_lon
+    global drone_marker, drone_path, drone_path_line, drone_lat, drone_lon, drone_icon
 
     drone_lat, drone_lon = lat, lon
     drone_path.append((lat, lon))
 
     def _update():
-        global drone_marker, drone_path_line
+        global drone_marker, drone_path_line, drone_icon
         if map_widget is None:
             return
         if drone_marker is None:
-            drone_marker = map_widget.set_marker(
-                lat, lon, text="🚁 Dron",
-                marker_color_circle="red",
-                marker_color_outside="darkred"
-            )
+            if drone_icon is None:
+                drone_icon = _load_drone_icon()
+            if drone_icon:
+                drone_marker = map_widget.set_marker(
+                    lat, lon, text="",
+                    icon=drone_icon,
+                    icon_anchor="center"
+                )
+            else:
+                drone_marker = map_widget.set_marker(
+                    lat, lon, text="🚁",
+                    marker_color_circle="red",
+                    marker_color_outside="darkred",
+                    font=("Arial", 8),
+                    image_zoom_visibility=(0, float("inf")),
+                )
         else:
             drone_marker.set_position(lat, lon)
 
@@ -1107,9 +1116,10 @@ def on_map_click(coords):
         if target_marker:
             target_marker.delete()
         target_marker = map_widget.set_marker(
-            lat, lon, text="📍 Destino",
+            lat, lon, text="",
             marker_color_circle="green",
-            marker_color_outside="darkgreen"
+            marker_color_outside="darkgreen",
+            font=("Arial", 3),
         )
 
     if map_widget:
