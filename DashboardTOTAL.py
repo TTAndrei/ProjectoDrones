@@ -34,41 +34,26 @@ from dronLink.Dron import Dron
 #  CONFIGURACIÓN
 # ══════════════════════════════════════════════════════════════════════════════
 
-# ── Broker HiveMQ ─────────────────────────────────────────────────────────────
 BROKER_DASHBOARD = "554f19f1f4944c978dd30b509d24afc0.s1.eu.hivemq.cloud"
 PORT             = 8884
 
 METERED_API = "https://testconection1.metered.live/api/v1/turn/credentials?apiKey=57312a00508de97f6ca0758cce3935fe7670"
 
-# ── Pool de usuarios HiveMQ (dashboard + camera) ──────────────────────────────
-# HiveMQ requiere credenciales fijas por usuario.
-# Cada instancia del dashboard ocupa el primer slot libre al arrancar.
-# Rellena nombre y contraseña con los usuarios que hayas creado en HiveMQ.
-# Deja vacío ("") cualquier slot que no hayas creado todavía.
 HIVEMQ_USERS = [
     {"user": "InterfazGlobal",  "password": "Kb2avDJmV2aj!Jz"},   # slot 1
-    {"user": "Client1",  "password": "GhJpQCxh_ktB4J9"},   # slot 2
-    {"user": "Client2",  "password": "GhJpQCxh_ktB4J9"},   # slot 3
-    {"user": "Client3",  "password": "GhJpQCxh_ktB4J9"},   # slot 4
+    {"user": "Client1",  "password": "GhJpQCxh_ktB4J9"},           # slot 2
+    {"user": "Client2",  "password": "GhJpQCxh_ktB4J9"},           # slot 3
+    {"user": "Client3",  "password": "GhJpQCxh_ktB4J9"},           # slot 4
 ]
 
-# ── AutopilotService / MQTT ───────────────────────────────────────────────────
-# Usuario dedicado al AutopilotService — solo lo usa la Estación de Tierra.
-USER_AUTOPILOT = "autopilotServiceDemo"   # rellena con el usuario HiveMQ del AutopilotService
-PASS_AUTOPILOT = "qkdb!LasqvHfy9V"   # rellena con su contraseña
+USER_AUTOPILOT = "autopilotServiceDemo"
+PASS_AUTOPILOT = "qkdb!LasqvHfy9V"
 
-# ── Topics fijos ──────────────────────────────────────────────────────────────
 T_OFFER  = "webrtc/offer"
 T_ANSWER = "webrtc/answer"
-
-# Topic retain para negociar quién es la Estación de Tierra
 T_AUTOPILOT_CLAIM = "autopilot/claim"
-
-# Topic retain por slot: cada slot marca si está ocupado
-# Formato: "slot/ocupado/1", "slot/ocupado/2", ...
 T_SLOT_PREFIX = "slot/ocupado/"
 
-# ── TCP (Modo Local) ──────────────────────────────────────────────────────────
 TCP_HOST = "localhost"
 TCP_PORT = 9999
 
@@ -76,24 +61,12 @@ TCP_PORT = 9999
 #  SELECCIÓN AUTOMÁTICA DE SLOT HIVEMQ
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Credenciales activas de esta instancia — se asignan en seleccionar_slot()
 USER_DASHBOARD = None
 PASS_DASHBOARD = None
-SLOT_INDEX     = None   # índice 0-3 del slot ocupado por esta instancia
+SLOT_INDEX     = None
 
 
 def seleccionar_slot():
-    """Prueba los slots en orden y ocupa el primero que esté libre.
-
-    Un slot está libre si:
-      · Tiene usuario/contraseña rellenos en HIVEMQ_USERS, Y
-      · No hay ningún mensaje retain en "slot/ocupado/<n>" en el broker.
-
-    Al ocupar un slot publica su índice con retain=True en ese topic,
-    de modo que los demás arranques sepan que ya está en uso.
-
-    Retorna el índice del slot ocupado, o termina el proceso si no hay ninguno.
-    """
     global USER_DASHBOARD, PASS_DASHBOARD, SLOT_INDEX
 
     import uuid as _uuid_inner
@@ -138,7 +111,6 @@ def seleccionar_slot():
         probe.disconnect()
 
         if not ocupado["valor"]:
-            # Slot libre → ocuparlo
             USER_DASHBOARD = creds["user"]
             PASS_DASHBOARD = creds["password"]
             SLOT_INDEX     = idx
@@ -148,16 +120,11 @@ def seleccionar_slot():
 
         print(f"[SLOT] Slot {idx+1} ocupado — probando siguiente...")
 
-    # Todos los slots ocupados
     _mostrar_error_slots_llenos()
     import sys; sys.exit(0)
 
 
 def _publicar_retain(user, password, topic, payload):
-    """Publica un mensaje retain con QoS 1 y espera el ACK antes de desconectar.
-    El retain queda grabado en el broker independientemente de si el cliente
-    sigue conectado — así que podemos desconectar limpiamente sin riesgo.
-    """
     import uuid as _uuid_inner
     ack = threading.Event()
 
@@ -173,7 +140,7 @@ def _publicar_retain(user, password, topic, payload):
         c.connect(BROKER_DASHBOARD, PORT)
         c.loop_start()
         c.publish(topic, payload, retain=True, qos=1)
-        ack.wait(timeout=4.0)       # esperar ACK del broker (QoS 1)
+        ack.wait(timeout=4.0)
         c.loop_stop()
         c.disconnect()
         status = "✓" if ack.is_set() else "⚠ sin ACK"
@@ -183,16 +150,13 @@ def _publicar_retain(user, password, topic, payload):
 
 
 def _marcar_slot_ocupado(idx, creds):
-    """Publica retain en el topic del slot y registra la limpieza con atexit."""
     import atexit
     _publicar_retain(creds["user"], creds["password"],
                      f"{T_SLOT_PREFIX}{idx + 1}", creds["user"])
-    # atexit garantiza la liberación incluso con Ctrl+C o excepción no capturada
     atexit.register(liberar_slot)
 
 
 def liberar_slot():
-    """Borra el retain del slot publicando payload vacío (borra el retain del broker)."""
     if SLOT_INDEX is None or USER_DASHBOARD is None:
         return
     print(f"[SLOT] Liberando slot {SLOT_INDEX + 1}...")
@@ -202,7 +166,6 @@ def liberar_slot():
 
 
 def _mostrar_error_slots_llenos():
-    """Ventana de error cuando todos los slots están en uso."""
     err = tk.Tk()
     err.title("Sin slots disponibles")
     err.resizable(False, False)
@@ -223,30 +186,24 @@ def _mostrar_error_slots_llenos():
     err.mainloop()
 
 
-# ── ID único por instancia ────────────────────────────────────────────────────
-# Se usa como sufijo en client_id MQTT y en los topics de esta instancia.
-#   · client_id único → el broker no expulsa a otras instancias conectadas
-#   · MY_ORIGIN único → cada instancia tiene su propio "buzón" de respuestas
-#     Ej: "interfazGlobal_a3f7/autopilotServiceDemo/arm_takeOff"
-#         "autopilotServiceDemo/interfazGlobal_a3f7/flying"
 import uuid as _uuid
-_INST_SUFFIX = _uuid.uuid4().hex[:6]            # 6 chars hex, ej. "a3f7c2"
-MY_ORIGIN    = f"interfazGlobal_{_INST_SUFFIX}" # origen único de esta instancia
+_INST_SUFFIX = _uuid.uuid4().hex[:6]
+MY_ORIGIN    = f"interfazGlobal_{_INST_SUFFIX}"
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  ESTADO GLOBAL
 # ══════════════════════════════════════════════════════════════════════════════
 
-pc            = None
-loop_dashboard = None
+pc               = None
+loop_dashboard   = None
 client_dashboard = None
-pending_offer = None
-previousBtn   = None
-MODE          = None   # "global" o "local"
-REAL_DRONE    = False
-IS_GROUND_STATION = False   # True si esta instancia es la Estación de Tierra
+pending_offer    = None
+previousBtn      = None
+MODE             = None
+REAL_DRONE       = False
+IS_GROUND_STATION = False
 
-dron          = Dron()
+dron = Dron()
 
 altShowLbl = headingShowLbl = stateShowLbl = None
 speedShowLbl = battShowLbl = gpsShowLbl = None
@@ -255,7 +212,7 @@ speedSldr  = gradesSldr = None
 root_window = None
 _connect_attempt_token = 0
 
-# Terminal integrada (feedback de print/logs en la propia app)
+# ── Terminal integrada ────────────────────────────────────────────────────────
 _stdout_redirector = None
 _stderr_redirector = None
 
@@ -275,11 +232,9 @@ class StreamToTk:
             self.original_stream.write(text)
         except Exception:
             pass
-
         w = self.widget
         if w is None:
             return
-
         try:
             w.after(0, self._append, text)
         except Exception:
@@ -347,20 +302,37 @@ drone_path      = []
 drone_path_line = None
 drone_lat       = None
 drone_lon       = None
-drone_icon       = None
+drone_icon      = None
 _goto_callback  = None
 
-# YOLOv5
-detect_object_id = None
-yolo_model       = None
+# ── YOLOv5 — detección multi-clase ───────────────────────────────────────────
+# detect_object_ids: set de class IDs COCO activos simultáneamente.
+# Vacío = sin detección.  Cada checkbox añade/quita un ID.
+detect_object_ids = set()
+yolo_model        = None
 
-# Estado del CameraService para poder detenerlo desde la UI
-camera_service_loop   = None
-camera_service_pc     = None
-camera_service_client = None
-camera_service_mode   = None
+# Clases COCO expuestas en la UI, agrupadas por categoría.
+# Formato: (nombre_display, class_id_coco)
+COCO_GRUPOS = [
+    ("Personas",    [("Persona",   0)]),
+    ("Vehículos",   [("Bicicleta", 1), ("Coche",    2), ("Moto",     3),
+                     ("Avión",     4), ("Autobús",  5), ("Tren",     6),
+                     ("Camión",    7)]),
+    ("Animales",    [("Pájaro",   14), ("Gato",    15), ("Perro",   16),
+                     ("Caballo",  17), ("Vaca",    19)]),
+    ("Objetos",     [("Mochila",  24), ("Paraguas",25), ("Maleta",  28),
+                     ("Pelota",   32), ("Silla",   56), ("Sofá",    57)]),
+    ("Electrónica", [("Portátil", 63), ("Móvil",   67), ("Reloj",   74)]),
+    ("Comida",      [("Banana",   46), ("Pizza",   53), ("Pastel",  55)]),
+]
+
+# ── Estado del CameraService ──────────────────────────────────────────────────
+camera_service_loop    = None
+camera_service_pc      = None
+camera_service_client  = None
+camera_service_mode    = None
 camera_service_running = False
-camera_stop_event     = threading.Event()
+camera_stop_event      = threading.Event()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -467,41 +439,21 @@ def selector_modo():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  NEGOCIACIÓN DE ROL — Estación de Tierra vs Cliente
-#  Solo aplica en modo Global + Dron Real.
-#
-#  Protocolo:
-#    1. Se abre un cliente MQTT temporal y se suscribe a T_AUTOPILOT_CLAIM.
-#    2. Se espera 1.5 s para recibir el mensaje retain (si lo hay).
-#    3. Si llega un claim de otro → ya hay una Estación de Tierra → soy Cliente.
-#    4. Si no llega nada → soy el primero → me proclamo Estación de Tierra
-#       publicando mi client_id con retain=True.
-#    5. Si yo mismo publiqué el claim anterior (mismo client_id) lo ignoro —
-#       reinicio del proceso con la misma instancia.
+#  NEGOCIACIÓN DE ROL
 # ══════════════════════════════════════════════════════════════════════════════
 
-# MY_ORIGIN ya declarado arriba — se reutiliza como client_id base de negociación
-MY_CLIENT_ID = MY_ORIGIN   # alias para compatibilidad con negociar_rol_ground_station
+MY_CLIENT_ID = MY_ORIGIN
 
 def negociar_rol_ground_station():
-    """Determina si esta instancia debe actuar como Estación de Tierra.
-
-    Retorna True  → soy Estación de Tierra (arranco AutopilotService).
-    Retorna False → soy Cliente (no arranco AutopilotService).
-
-    Se llama siempre en modo global (tanto dron real como simulación).
-    """
     resultado = {"claim_recibido": None, "evento": threading.Event()}
 
     def _on_message(cli, userdata, msg):
         if msg.topic == T_AUTOPILOT_CLAIM:
             payload = msg.payload.decode("utf-8").strip()
-            # Ignorar claim propio (reinicio de la misma instancia)
             if payload and payload != MY_CLIENT_ID:
                 resultado["claim_recibido"] = payload
             resultado["evento"].set()
 
-    # Cliente temporal solo para negociación
     tmp = mqtt.Client(client_id=MY_CLIENT_ID + "_probe", transport="websockets")
     tmp.ws_set_options(path="/mqtt")
     tmp.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
@@ -511,46 +463,36 @@ def negociar_rol_ground_station():
     tmp.subscribe(T_AUTOPILOT_CLAIM)
     tmp.loop_start()
 
-    # Esperar hasta 1.5 s por un retain existente
     resultado["evento"].wait(timeout=1.5)
     tmp.loop_stop()
     tmp.disconnect()
 
     if resultado["claim_recibido"]:
-        # Ya hay otra Estación de Tierra activa
         print(f"[ROL] Estación de Tierra detectada: {resultado['claim_recibido']}")
         return False
     else:
-        # Soy el primero — publicar claim con retain=True para que los demás me vean
         _publicar_claim()
         print(f"[ROL] Me proclamo Estación de Tierra ({MY_CLIENT_ID})")
         return True
 
 
 def _publicar_claim():
-    """Publica el claim de Estación de Tierra con retain=True y registra atexit."""
     import atexit
     _publicar_retain(USER_DASHBOARD, PASS_DASHBOARD, T_AUTOPILOT_CLAIM, MY_CLIENT_ID)
     atexit.register(limpiar_claim_ground_station)
 
 
 def limpiar_claim_ground_station():
-    """Borra el claim retain publicando payload vacío."""
     print("[ROL] Liberando claim de Estación de Tierra...")
     _publicar_retain(USER_DASHBOARD, PASS_DASHBOARD, T_AUTOPILOT_CLAIM, "")
     print("[ROL] Claim liberado")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  DIÁLOGO DE ROL — informa al usuario qué rol tiene esta instancia
+#  DIÁLOGO DE ROL
 # ══════════════════════════════════════════════════════════════════════════════
 
 def mostrar_dialogo_rol(es_estacion):
-    """Muestra una ventana modal que informa del rol asignado.
-
-    Estación de Tierra → verde oscuro, icono 📡
-    Cliente            → azul oscuro, icono 📺
-    """
     d = tk.Tk()
     d.title("Rol asignado")
     d.resizable(False, False)
@@ -579,31 +521,18 @@ def mostrar_dialogo_rol(es_estacion):
     y = (d.winfo_screenheight() - h) // 2
     d.geometry(f"{w}x{h}+{x}+{y}")
 
-    # Franja superior con color de acento
     franja = tk.Frame(d, bg=accent, height=5)
     franja.pack(fill="x")
-
-    # Icono grande
-    tk.Label(d, text=icono, font=("Arial", 42), bg=bg_color, fg=accent
-             ).pack(pady=(18, 4))
-
-    # Título del rol
-    tk.Label(d, text=titulo_rol, font=("Arial", 16, "bold"), bg=bg_color, fg=accent
-             ).pack(pady=(0, 8))
-
-    # Descripción
+    tk.Label(d, text=icono, font=("Arial", 42), bg=bg_color, fg=accent).pack(pady=(18, 4))
+    tk.Label(d, text=titulo_rol, font=("Arial", 16, "bold"), bg=bg_color, fg=accent).pack(pady=(0, 8))
     tk.Label(d, text=desc, font=("Arial", 9), bg=bg_color, fg="#cccccc",
              justify="center", wraplength=420).pack(pady=(0, 20))
-
-    # Botón continuar
     tk.Button(d, text="Continuar →",
               font=("Arial", 11, "bold"), bg=accent, fg="white",
               activebackground=bg_color, relief="flat", cursor="hand2",
               padx=24, pady=8, command=d.destroy).pack()
 
-    # Cerrar automáticamente tras 6 s si el usuario no pulsa
     d.after(6000, lambda: d.destroy() if d.winfo_exists() else None)
-
     d.protocol("WM_DELETE_WINDOW", d.destroy)
     d.mainloop()
 
@@ -701,9 +630,6 @@ def autopilot_on_connect(cli, userdata, flags, rc):
 
 
 def start_autopilot_service():
-    """Arranca el AutopilotService en su propio hilo.
-    Solo se llama si IS_GROUND_STATION == True.
-    """
     global client_autopilot
 
     def _run():
@@ -1005,8 +931,7 @@ def stop_camera_service():
     print("[CAM] Solicitud de desconexión de cámara...")
     camera_stop_event.set()
 
-    # Forzar cierre inmediato del PeerConnection en su loop asíncrono.
-    loop = camera_service_loop
+    loop   = camera_service_loop
     pc_cam = camera_service_pc
     if loop is not None and pc_cam is not None:
         async def _close_pc():
@@ -1014,13 +939,11 @@ def stop_camera_service():
                 await pc_cam.close()
             except Exception:
                 pass
-
         try:
             asyncio.run_coroutine_threadsafe(_close_pc(), loop)
         except Exception:
             pass
 
-    # Cerrar cliente MQTT si el modo es global.
     if camera_service_client is not None:
         try:
             camera_service_client.loop_stop()
@@ -1033,32 +956,63 @@ def stop_camera_service():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  DETECCIÓN YOLO
+#  DETECCIÓN YOLO — MULTI-CLASE
 # ══════════════════════════════════════════════════════════════════════════════
 
 def load_yolo():
+    """Carga YOLOv5s en segundo plano (solo la primera vez que se necesita)."""
     global yolo_model
     if yolo_model is None:
-        print("[DET] Cargando YOLOv5...")
+        print("[DET] Cargando YOLOv5s...")
         import torch
         yolo_model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
         yolo_model.eval()
         print("[DET] Modelo listo")
 
-def set_detect(obj_id):
-    global detect_object_id
-    threading.Thread(target=load_yolo, daemon=True).start()
-    detect_object_id = obj_id
-    print(f"[DET] Detectando objeto ID={obj_id}")
+
+def toggle_detect(obj_id: int, active: bool):
+    """Activa o desactiva una clase COCO en el conjunto de detección.
+
+    Si se activa la primera clase y el modelo no está cargado,
+    lo arranca en un hilo para no bloquear la UI.
+    """
+    if active:
+        detect_object_ids.add(obj_id)
+        if yolo_model is None:
+            threading.Thread(target=load_yolo, daemon=True).start()
+        print(f"[DET] +clase {obj_id}  activas={sorted(detect_object_ids)}")
+    else:
+        detect_object_ids.discard(obj_id)
+        print(f"[DET] -clase {obj_id}  activas={sorted(detect_object_ids)}")
+
 
 def run_detect(frame):
-    if yolo_model is None or detect_object_id is None:
+    """Ejecuta inferencia sobre un frame BGR y devuelve lista de
+    (x1, y1, x2, y2, nombre_clase) para todas las clases activas.
+    Devuelve [] si no hay clases seleccionadas o el modelo no cargó.
+    """
+    if yolo_model is None or not detect_object_ids:
         return []
+
+    # Mapa id→nombre para la etiqueta visual en el vídeo
+    id_to_name = {
+        oid: nombre
+        for _, clases in COCO_GRUPOS
+        for nombre, oid in clases
+        if oid in detect_object_ids
+    }
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         results = yolo_model(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-    return [tuple(map(int, box)) for *box, conf, cls in results.xyxy[0]
-            if int(cls.item()) == detect_object_id]
+
+    boxes = []
+    for *xyxy, conf, cls in results.xyxy[0]:
+        cls_id = int(cls.item())
+        if cls_id in detect_object_ids:
+            x1, y1, x2, y2 = map(int, xyxy)
+            boxes.append((x1, y1, x2, y2, id_to_name.get(cls_id, str(cls_id))))
+    return boxes
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1075,13 +1029,15 @@ async def show_video(track):
             if isinstance(frame, VideoFrame):
                 img = frame.to_ndarray(format="bgr24")
                 frame_count += 1
-                if frame_count % 30 == 0 and detect_object_id is not None:
+                # Inferencia cada 30 frames si hay clases activas
+                if frame_count % 30 == 0 and detect_object_ids:
                     last_boxes = await asyncio.get_event_loop().run_in_executor(
                         None, run_detect, img.copy()
                     )
-                for (x1, y1, x2, y2) in last_boxes:
+                # Dibujar bounding boxes con nombre de clase
+                for (x1, y1, x2, y2, label) in last_boxes:
                     cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(img, "detected", (x1, y1-10),
+                    cv2.putText(img, label, (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 cv2.imshow("Video Dron", img)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -1179,13 +1135,13 @@ async def show_video_local(track):
             if isinstance(frame, VideoFrame):
                 img = frame.to_ndarray(format="bgr24")
                 frame_count += 1
-                if frame_count % 30 == 0 and detect_object_id is not None:
+                if frame_count % 30 == 0 and detect_object_ids:
                     last_boxes = await asyncio.get_event_loop().run_in_executor(
                         None, run_detect, img.copy()
                     )
-                for (x1, y1, x2, y2) in last_boxes:
+                for (x1, y1, x2, y2, label) in last_boxes:
                     cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(img, "detected", (x1, y1-10),
+                    cv2.putText(img, label, (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 cv2.imshow("Video Dron", img)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -1239,6 +1195,7 @@ def start_webrtc_dashboard():
 def on_mqtt_message_dashboard(cli, userdata, msg):
     global pending_offer, _connect_attempt_token
     topic = msg.topic
+
     if topic == T_OFFER:
         try:
             data = json.loads(msg.payload)
@@ -1403,17 +1360,15 @@ def goto_gps_local(lat, lon):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _reset_btns():
-    for b, t in [(arm_takeOffBtn,'Despegar'),(landBtn,'Aterrizar'),(RTLBtn,'RTL')]:
+    for b, t in [(arm_takeOffBtn, 'Despegar'), (landBtn, 'Aterrizar'), (RTLBtn, 'RTL')]:
         b.configure(text=t, fg='black', bg='dark orange')
 
 def _reset_connect_btn():
     connectBtn.configure(text='Conectar', fg='black', bg='dark orange')
 
-
 def _show_connect_error():
     connectBtn.configure(text='Error de conexion', fg='white', bg='#c62828')
     connectBtn.after(2000, lambda: _reset_connect_btn() if connectBtn['text'] == 'Error de conexion' else None)
-
 
 def _set_connected_btn():
     connectBtn.configure(text='Conectado', fg='white', bg='green')
@@ -1429,7 +1384,6 @@ def connect_global():
     _connect_attempt_token += 1
     my_token = _connect_attempt_token
 
-    # Si no llega evento 'connected' en un tiempo razonable, volver al estado inicial.
     def _timeout_reset():
         time.sleep(20)
         try:
@@ -1529,6 +1483,83 @@ def changeNavSpeed_local(e): dron.changeNavSpeed(float(speedSldr.get()))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  PANEL DE DETECCIÓN MULTI-CLASE
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _build_detection_panel(parent):
+    """Panel con checkboxes multi-clase organizados por categoría COCO.
+
+    - 25 clases en 6 grupos temáticos.
+    - Selección simultánea ilimitada: cada checkbox llama a toggle_detect().
+    - Canvas + scrollbar vertical para no desbordar el panel lateral.
+    - Botón "Desactivar todas" para resetear el set de golpe.
+    """
+    df = tk.LabelFrame(parent, text="Detección de objetos (multi-clase COCO)")
+    df.grid(row=11, column=0, columnspan=2, padx=5, pady=3, sticky="nsew")
+
+    canvas = tk.Canvas(df, height=130, highlightthickness=0)
+    vsb    = tk.Scrollbar(df, orient="vertical", command=canvas.yview)
+    canvas.configure(yscrollcommand=vsb.set)
+    vsb.pack(side="right", fill="y")
+    canvas.pack(side="left", fill="both", expand=True)
+
+    inner = tk.Frame(canvas)
+    win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+    canvas.bind("<Configure>",
+                lambda e: canvas.itemconfig(win_id, width=e.width))
+    inner.bind("<Configure>",
+               lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+    canvas.bind("<MouseWheel>",
+                lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+
+    COLS = 5
+    checkbox_vars = {}   # obj_id → BooleanVar
+
+    row_idx = 0
+    for grupo_nombre, clases in COCO_GRUPOS:
+        # Cabecera de grupo
+        tk.Label(inner, text=grupo_nombre,
+                 font=("Arial", 7, "bold"), fg="#555555"
+                 ).grid(row=row_idx, column=0, columnspan=COLS,
+                        sticky="w", padx=4, pady=(4, 0))
+        row_idx += 1
+
+        for col_idx, (nombre, oid) in enumerate(clases):
+            var = tk.BooleanVar(value=False)
+            checkbox_vars[oid] = var
+            tk.Checkbutton(
+                inner,
+                text=nombre,
+                variable=var,
+                font=("Arial", 8),
+                onvalue=True, offvalue=False,
+                command=lambda o=oid, v=var: toggle_detect(o, v.get()),
+                anchor="w", padx=2, pady=1,
+            ).grid(row=row_idx + col_idx // COLS,
+                   column=col_idx % COLS,
+                   sticky="w", padx=3, pady=1)
+
+        row_idx += (len(clases) + COLS - 1) // COLS
+
+    # Botón para desactivar t0do de golpe
+    def _clear_all():
+        detect_object_ids.clear()
+        for v in checkbox_vars.values():
+            v.set(False)
+        print("[DET] Todas las clases desactivadas")
+
+    tk.Button(inner, text="✕  Desactivar todas",
+              font=("Arial", 8), bg="#e94560", fg="white",
+              relief="flat", padx=6, pady=2,
+              command=_clear_all
+              ).grid(row=row_idx, column=0, columnspan=COLS,
+                     padx=4, pady=(6, 4), sticky="w")
+
+    return df
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  GUI
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1540,26 +1571,18 @@ def crear_ventana(modo):
     global speedSldr, gradesSldr, previousBtn
 
     if modo == "global":
-        # ── Negociación de rol (dron real Y simulación con múltiples instancias) ─
-        # El mecanismo es el mismo en ambos casos: retain MQTT para elegir quién
-        # arranca el AutopilotService. Sin esto, dos instancias en simulación
-        # colisionarían con el mismo client_id "autopilotServiceDemo".
         print("[ROL] Negociando rol Estación de Tierra vs Cliente...")
         IS_GROUND_STATION = negociar_rol_ground_station()
         mostrar_dialogo_rol(IS_GROUND_STATION)
 
-        # ── Arrancar AutopilotService solo si soy Estación de Tierra ─────────
         if IS_GROUND_STATION:
             start_autopilot_service()
             print("[MAIN] AutopilotService iniciado (Estación de Tierra)")
         else:
             print("[MAIN] AutopilotService omitido (Cliente)")
 
-        # ── Arrancar CameraService siempre (cada consola ve su propia cámara) ─
         start_camera_service_global()
 
-        # ── Cliente MQTT del dashboard ────────────────────────────────────────
-        # client_id único por instancia → el broker no expulsa al cliente anterior
         client_dashboard = mqtt.Client(client_id=f"Dashboard_{_INST_SUFFIX}", transport="websockets")
         client_dashboard.ws_set_options(path="/mqtt")
         client_dashboard.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
@@ -1567,7 +1590,6 @@ def crear_ventana(modo):
         client_dashboard.on_message = on_mqtt_message_dashboard
         client_dashboard.on_connect = lambda c,u,f,rc: print("[MQTT] Dashboard conectado" if rc==0 else f"[MQTT] Error {rc}")
         client_dashboard.connect(BROKER_DASHBOARD, PORT)
-        # Suscribirse al buzón propio de esta instancia (topic dinámico con MY_ORIGIN)
         client_dashboard.subscribe(f'autopilotServiceDemo/{MY_ORIGIN}/#')
         client_dashboard.subscribe(T_OFFER)
         client_dashboard.loop_start()
@@ -1579,13 +1601,12 @@ def crear_ventana(modo):
         _startT  = startTelem_global; _stopT = stopTelem_global
         _heading = changeHeading_global; _speed = changeNavSpeed_global
 
-        # Título indica el rol (siempre, tanto en real como en simulación)
         sim_tag = " · Sim" if not REAL_DRONE else ""
         rol_tag = "📡 Estación de Tierra" if IS_GROUND_STATION else "📺 Cliente"
         titulo  = f"Dashboard Dron — Modo Global 🌐{sim_tag}  |  {rol_tag}"
 
     else:  # local
-        IS_GROUND_STATION = True   # en local siempre es la única instancia
+        IS_GROUND_STATION = True
         start_camera_service_local()
 
         _connect = connect_local;   _takeoff = takeoff_local
@@ -1604,7 +1625,6 @@ def crear_ventana(modo):
     v.columnconfigure(1, weight=1)
     v.rowconfigure(0, weight=1)
 
-    # ── Indicador de rol (visible en barra superior en modo global) ──────────
     if modo == "global":
         rol_bg    = "#1b4d2e" if IS_GROUND_STATION else "#1a2a4a"
         rol_fg    = "#2ecc71" if IS_GROUND_STATION else "#3498db"
@@ -1678,16 +1698,11 @@ def crear_ventana(modo):
     battShowLbl    = tk.Label(tf, text=''); battShowLbl.grid(row=1, column=4, padx=2)
     gpsShowLbl     = tk.Label(tf, text=''); gpsShowLbl.grid(row=1, column=5, padx=2)
 
-    btn("▶ Ver video del dron", _video, 10, col=0, cs=1)
+    btn("▶ Ver video del dron",  _video,   10, col=0, cs=1)
     btn("⏹ Desconectar cámara", _stopCam, 10, col=1, cs=1, bg="#e14d03")
 
-    df = tk.LabelFrame(ctrl, text="Detección de objetos")
-    df.grid(row=11, column=0, columnspan=2, padx=5, pady=3, sticky="nsew")
-    for i in range(4): df.columnconfigure(i, weight=1)
-    for col, (name, oid) in enumerate([("Banana",46),("Reloj",74),("Pizza",53),("Bicicleta",1)]):
-        tk.Button(df, text=name, bg="dark orange",
-                  command=lambda o=oid: set_detect(o)).grid(
-            row=0, column=col, padx=5, pady=5, sticky="nsew")
+    # ── Panel de detección multi-clase ────────────────────────────────────────
+    _build_detection_panel(ctrl)
 
     # ── Panel derecho: mapa ───────────────────────────────────────────────────
     global map_widget, _goto_callback
@@ -1726,16 +1741,16 @@ def crear_ventana(modo):
             drone_path_line.delete()
             drone_path_line = None
 
-    tk.Button(map_ctrl, text="🎯 Centrar en dron",  bg="dark orange",
+    tk.Button(map_ctrl, text="🎯 Centrar en dron", bg="dark orange",
               command=center_on_drone).grid(row=0, column=0, padx=3, pady=3, sticky="ew")
-    tk.Button(map_ctrl, text="🗑 Borrar ruta",       bg="dark orange",
+    tk.Button(map_ctrl, text="🗑 Borrar ruta",      bg="dark orange",
               command=clear_path).grid(row=0, column=1, padx=3, pady=3, sticky="ew")
-    tk.Button(map_ctrl, text="🗺 OpenStreetMap",     bg="dark orange",
+    tk.Button(map_ctrl, text="🗺 OpenStreetMap",    bg="dark orange",
               command=lambda: map_widget.set_tile_server(
                   "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png")
               ).grid(row=0, column=2, padx=3, pady=3, sticky="ew")
 
-    # ── Terminal integrada (desplegable) ─────────────────────────────────────
+    # ── Terminal integrada (desplegable) ──────────────────────────────────────
     term_frame = tk.LabelFrame(v, text="Terminal (feedback Python)")
     term_frame.grid(row=terminal_row, column=0, columnspan=2,
                     sticky="nsew", padx=4, pady=(0, 4))
@@ -1791,26 +1806,21 @@ def crear_ventana(modo):
               )).grid(row=0, column=1, padx=(0, 5), sticky="w")
 
     term_body.grid_remove()
-
     _attach_log_widget(term_text)
     print("[UI] Terminal integrada lista")
 
     v.geometry("1100x860")
 
     # ── Liberar recursos al cerrar ────────────────────────────────────────────
-    # atexit ya gestiona liberar_slot y limpiar_claim en Ctrl+C o crash,
-    # pero WM_DELETE_WINDOW garantiza la limpieza en cierre normal de ventana.
     if modo == "global" and IS_GROUND_STATION:
-        # Estación de Tierra (real o simulación): libera claim Y slot
         v.protocol("WM_DELETE_WINDOW",
                    lambda: (stop_camera_service(), limpiar_claim_ground_station(), liberar_slot(), v.destroy()))
     elif modo == "global":
-        # Cliente (real o simulación): solo libera el slot
         v.protocol("WM_DELETE_WINDOW",
                    lambda: (stop_camera_service(), liberar_slot(), v.destroy()))
     else:
-        # En local, al cerrar también detenemos la cámara.
-        v.protocol("WM_DELETE_WINDOW", lambda: (stop_camera_service(), v.destroy()))
+        v.protocol("WM_DELETE_WINDOW",
+                   lambda: (stop_camera_service(), v.destroy()))
 
     return v
 
@@ -1824,9 +1834,8 @@ if __name__ == "__main__":
     modo = selector_modo()
     MODE = modo
 
-    # En modo global hay que ocupar un slot HiveMQ antes de continuar
     if modo == "global":
-        seleccionar_slot()   # asigna USER_DASHBOARD, PASS_DASHBOARD, SLOT_INDEX
+        seleccionar_slot()
 
     print(f"[MAIN] Simulación={'sí' if not REAL_DRONE else 'no'}, Modo: {modo}")
     crear_ventana(modo).mainloop()
