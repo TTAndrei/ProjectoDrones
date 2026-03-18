@@ -657,22 +657,55 @@ def autopilot_on_connect(cli, userdata, flags, rc):
 
 
 def start_autopilot_service():
+    """Arranca el AutopilotService con reconexión automática ante caídas SSL/red.
+
+    HiveMQ Cloud puede cerrar conexiones inactivas o tras un timeout SSL.
+    loop_forever(retry_first_connection=True) reintenta la conexión inicial,
+    pero no cubre caídas posteriores. Por eso usamos un bucle externo que
+    recrea el cliente MQTT completo tras cualquier excepción, con backoff
+    exponencial (1 s, 2 s, 4 s … hasta 30 s máximo).
+    """
     global client_autopilot
+
+    def _build_client():
+        """Crea y configura un cliente MQTT nuevo para el AutopilotService."""
+        c = mqtt.Client("autopilotServiceDemo", transport="websockets")
+        c.ws_set_options(path="/mqtt")
+        c.tls_set(cert_reqs=mqtt.ssl.CERT_REQUIRED,
+                  tls_version=mqtt.ssl.PROTOCOL_TLSv1_2)
+        c.tls_insecure_set(False)
+        c.username_pw_set(USER_AUTOPILOT, PASS_AUTOPILOT)
+        c.on_connect = autopilot_on_connect
+        c.on_message = autopilot_on_message
+        c.on_disconnect = _autopilot_on_disconnect
+        return c
+
+    def _autopilot_on_disconnect(cli, userdata, rc):
+        if rc != 0:
+            print(f"[AUTOPILOT] Desconexión inesperada (rc={rc}) — reconectando...")
 
     def _run():
         global client_autopilot
-        client_autopilot = mqtt.Client("autopilotServiceDemo", transport="websockets")
-        client_autopilot.ws_set_options(path="/mqtt")
-        client_autopilot.tls_set(cert_reqs=mqtt.ssl.CERT_REQUIRED,
-                                  tls_version=mqtt.ssl.PROTOCOL_TLSv1_2)
-        client_autopilot.tls_insecure_set(False)
-        client_autopilot.username_pw_set(USER_AUTOPILOT, PASS_AUTOPILOT)
-        client_autopilot.on_connect = autopilot_on_connect
-        client_autopilot.on_message = autopilot_on_message
-        client_autopilot.connect(BROKER_DASHBOARD, PORT)
-        client_autopilot.subscribe('+/autopilotServiceDemo/#')
-        print("[AUTOPILOT] Servicio listo — esperando comandos")
-        client_autopilot.loop_forever()
+        backoff = 1
+        while True:
+            try:
+                client_autopilot = _build_client()
+                # keepalive=30 s: mantiene viva la conexión SSL enviando pings
+                client_autopilot.connect(BROKER_DASHBOARD, PORT, keepalive=30)
+                client_autopilot.subscribe('+/autopilotServiceDemo/#')
+                print("[AUTOPILOT] Servicio listo — esperando comandos")
+                backoff = 1   # reset al conectar con éxito
+                # loop_forever gestiona el reconnect interno de paho,
+                # pero ante SSLEOFError lanza excepción y salimos al except.
+                client_autopilot.loop_forever()
+            except Exception as e:
+                print(f"[AUTOPILOT] Error de conexión: {e} — reintentando en {backoff} s...")
+                try:
+                    client_autopilot.disconnect()
+                except Exception:
+                    pass
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 30)
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -1681,7 +1714,7 @@ def _build_detection_panel(parent):
 
         row_idx += (len(clases) + COLS - 1) // COLS
 
-    # Botón para desactivar todos de golpe
+    # Botón para desactivar todo de golpe
     def _clear_all():
         detect_object_ids.clear()
         for v in checkbox_vars.values():
@@ -1732,10 +1765,19 @@ def crear_ventana(modo):
         client_dashboard.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
         client_dashboard.username_pw_set(USER_DASHBOARD, PASS_DASHBOARD)
         client_dashboard.on_message = on_mqtt_message_dashboard
-        client_dashboard.on_connect = lambda c,u,f,rc: print("[MQTT] Dashboard conectado" if rc==0 else f"[MQTT] Error {rc}")
-        client_dashboard.connect(BROKER_DASHBOARD, PORT)
+        client_dashboard.on_connect = lambda c,u,f,rc: (
+            print("[MQTT] Dashboard conectado" if rc==0 else f"[MQTT] Error {rc}"),
+            c.subscribe(f'autopilotServiceDemo/{MY_ORIGIN}/#') if rc==0 else None
+        )
+        client_dashboard.on_disconnect = lambda c,u,rc: (
+            print(f"[MQTT] Dashboard desconectado (rc={rc}) — paho reconectará automáticamente")
+            if rc != 0 else None
+        )
+        # keepalive=30 s para mantener la conexión SSL activa con HiveMQ Cloud
+        client_dashboard.connect(BROKER_DASHBOARD, PORT, keepalive=30)
         client_dashboard.subscribe(f'autopilotServiceDemo/{MY_ORIGIN}/#')
-        # T_OFFER genérico eliminado (R8): cada instancia usa webrtc/offer/<MY_ORIGIN>
+        # loop_start + reconnect_delay: paho reintentará la conexión si cae
+        client_dashboard.reconnect_delay_set(min_delay=1, max_delay=30)
         client_dashboard.loop_start()
 
         _connect = connect_global;  _takeoff = takeoff_global
@@ -1872,7 +1914,6 @@ def crear_ventana(modo):
     map_ctrl.columnconfigure(1, weight=1)
     map_ctrl.columnconfigure(2, weight=1)
     map_ctrl.columnconfigure(3, weight=1)
-
 
     def center_on_drone():
         if drone_lat and drone_lon:

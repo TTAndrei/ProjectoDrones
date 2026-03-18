@@ -15,9 +15,9 @@ PORT   = 8884
 # ── Rellena con los mismos usuarios que en el dashboard ──────────────────────
 HIVEMQ_USERS = [
     {"user": "InterfazGlobal",  "password": "Kb2avDJmV2aj!Jz"},   # slot 1
-    {"user": "Client1",  "password": "GhJpQCxh_ktB4J9"},   # slot 2
-    {"user": "",  "password": ""},   # slot 3
-    {"user": "",  "password": ""},   # slot 4
+    {"user": "Client1",  "password": "GhJpQCxh_ktB4J9"},           # slot 2
+    {"user": "Client2",  "password": "GhJpQCxh_ktB4J9"},           # slot 3
+    {"user": "Client3",  "password": "GhJpQCxh_ktB4J9"},           # slot 4
 ]
 
 T_SLOT_PREFIX     = "slot/ocupado/"
