@@ -568,28 +568,89 @@ def mostrar_dialogo_rol(es_estacion):
 #  AUTOPILOT SERVICE (integrado)
 # ══════════════════════════════════════════════════════════════════════════════
 
-autopilot_sending_topic = None
-client_autopilot        = None
+client_autopilot = None
+
+# ── Telemetría multi-cliente ───────────────────────────────────────────────────
+# Diccionario  origin → "autopilotServiceDemo/<origin>"
+# Un cliente se añade con startTelemetry y se elimina con stopTelemetry.
+# En cada tick dronLink publica a TODOS los suscriptores simultáneamente,
+# de modo que N instancias del dashboard reciben telemetría sin interferirse.
+_telem_subscribers: dict = {}          # origin → sending_topic
+_telem_lock = threading.Lock()         # acceso thread-safe desde el hilo dronLink
+_telem_active = False                  # True si dronLink está enviando telemetría
 
 
-def autopilot_publish_event(event):
-    client_autopilot.publish(autopilot_sending_topic + '/' + event)
-    print(f"[AUTOPILOT] → {autopilot_sending_topic}/{event}")
+def _autopilot_topic(origin: str) -> str:
+    return f"autopilotServiceDemo/{origin}"
+
+
+def autopilot_publish_event(event, origin: str = None):
+    """Publica un evento de estado al cliente que lo originó.
+    Si origin es None se usa el primer suscriptor conocido (compatibilidad).
+    """
+    if origin is None:
+        with _telem_lock:
+            origin = next(iter(_telem_subscribers), None)
+    if origin is None:
+        return
+    topic = _autopilot_topic(origin) + '/' + event
+    try:
+        client_autopilot.publish(topic)
+        print(f"[AUTOPILOT] → {topic}")
+    except Exception as e:
+        print(f"[AUTOPILOT] Error publicando evento: {e}")
 
 
 def autopilot_publish_telemetry(telemetry_info):
-    client_autopilot.publish(autopilot_sending_topic + '/telemetryInfo',
-                              json.dumps(telemetry_info))
+    """Publica telemetría a TODOS los clientes suscritos.
+
+    Se llama desde el hilo interno de dronLink (_send_telemetry_info).
+    Usa try/except por cada suscriptor para que un error de red en uno
+    no interrumpa la entrega al resto ni haga crashear el hilo de dronLink.
+    Si client_autopilot está en medio de una reconexión (None o desconectado)
+    simplemente descarta el tick y continúa.
+    """
+    cli = client_autopilot          # captura local — puede ser None durante reconnect
+    if cli is None:
+        return
+    try:
+        payload = json.dumps(telemetry_info)
+    except Exception:
+        return
+    with _telem_lock:
+        topics = list(_telem_subscribers.values())
+    for base_topic in topics:
+        try:
+            cli.publish(base_topic + '/telemetryInfo', payload)
+        except Exception as e:
+            # No re-lanzar: el hilo dronLink no debe morir por un error MQTT puntual
+            print(f"[AUTOPILOT] Error telemetría → {base_topic}: {type(e).__name__}")
+
+
+def _start_telem_if_needed():
+    """Arranca el hilo de telemetría de dronLink si aún no está activo."""
+    global _telem_active
+    if not _telem_active:
+        dron.send_telemetry_info(autopilot_publish_telemetry)
+        _telem_active = True
+        print("[AUTOPILOT] Telemetría iniciada")
+
+
+def _stop_telem_if_empty():
+    """Detiene el hilo de telemetría si ya no hay suscriptores."""
+    global _telem_active
+    if _telem_active and not _telem_subscribers:
+        dron.stop_sending_telemetry_info()
+        _telem_active = False
+        print("[AUTOPILOT] Telemetría detenida (sin suscriptores)")
 
 
 def autopilot_on_message(cli, userdata, message):
-    global autopilot_sending_topic
-
     parts   = message.topic.split("/")
     origin  = parts[0]
     command = parts[2]
+    sending_topic = _autopilot_topic(origin)
 
-    autopilot_sending_topic = "autopilotServiceDemo/" + origin
     print(f"[AUTOPILOT] {origin} → {command}")
 
     if command == 'connect':
@@ -604,20 +665,21 @@ def autopilot_on_message(cli, userdata, message):
             ok = dron.connect(connection_string, baud, freq=10)
             if ok and dron.state == 'connected':
                 print(f'Conectado al dron ({connection_string} @ {baud})')
-                autopilot_publish_event('connected')
+                autopilot_publish_event('connected', origin)
             else:
                 print(f'[AUTOPILOT] No se pudo conectar ({connection_string} @ {baud})')
-                autopilot_publish_event('connectError')
+                autopilot_publish_event('connectError', origin)
         except Exception as e:
             print(f"[AUTOPILOT] Error conectando: {e}")
-            autopilot_publish_event('connectError')
+            autopilot_publish_event('connectError', origin)
 
     elif command == 'arm_takeOff':
         if dron.state == 'connected':
             dron.arm()
             altura = int(message.payload.decode("utf-8"))
             dron.takeOff(altura, blocking=False,
-                         callback=autopilot_publish_event, params='flying')
+                         callback=lambda ev: autopilot_publish_event(ev, origin),
+                         params='flying')
 
     elif command == 'go':
         if dron.state == 'flying':
@@ -626,18 +688,28 @@ def autopilot_on_message(cli, userdata, message):
     elif command == 'Land':
         if dron.state == 'flying':
             dron.Land(blocking=False,
-                      callback=autopilot_publish_event, params='landed')
+                      callback=lambda ev: autopilot_publish_event(ev, origin),
+                      params='landed')
 
     elif command == 'RTL':
         if dron.state == 'flying':
             dron.RTL(blocking=False,
-                     callback=autopilot_publish_event, params='atHome')
+                     callback=lambda ev: autopilot_publish_event(ev, origin),
+                     params='atHome')
 
     elif command == 'startTelemetry':
-        dron.send_telemetry_info(autopilot_publish_telemetry)
+        with _telem_lock:
+            _telem_subscribers[origin] = sending_topic
+        print(f"[AUTOPILOT] Suscriptor telemetría: {origin} "
+              f"(total={len(_telem_subscribers)})")
+        _start_telem_if_needed()
 
     elif command == 'stopTelemetry':
-        dron.stop_sending_telemetry_info()
+        with _telem_lock:
+            _telem_subscribers.pop(origin, None)
+        print(f"[AUTOPILOT] Baja telemetría: {origin} "
+              f"(total={len(_telem_subscribers)})")
+        _stop_telem_if_empty()
 
     elif command == 'changeHeading':
         dron.changeHeading(float(message.payload.decode("utf-8")))
