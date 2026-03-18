@@ -1681,7 +1681,7 @@ def _build_detection_panel(parent):
 
         row_idx += (len(clases) + COLS - 1) // COLS
 
-    # Botón para desactivar t0do de golpe
+    # Botón para desactivar todos de golpe
     def _clear_all():
         detect_object_ids.clear()
         for v in checkbox_vars.values():
