@@ -1873,6 +1873,7 @@ def crear_ventana(modo):
     map_ctrl.columnconfigure(2, weight=1)
     map_ctrl.columnconfigure(3, weight=1)
 
+
     def center_on_drone():
         if drone_lat and drone_lon:
             map_widget.set_position(drone_lat, drone_lon)
