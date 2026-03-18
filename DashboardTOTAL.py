@@ -9,7 +9,7 @@
 #  pip install aiortc paho-mqtt av opencv-python requests
 # =====================================================
 
-import asyncio, json, ssl, threading, time, requests
+import asyncio, json, ssl, threading, time, requests, sys
 import logging, warnings
 
 # Silenciar FutureWarning de torch en YOLOv5
@@ -250,6 +250,92 @@ altShowLbl = headingShowLbl = stateShowLbl = None
 speedShowLbl = battShowLbl = gpsShowLbl = None
 connectBtn = arm_takeOffBtn = landBtn = RTLBtn = None
 speedSldr  = gradesSldr = None
+root_window = None
+_connect_attempt_token = 0
+
+# Terminal integrada (feedback de print/logs en la propia app)
+_stdout_redirector = None
+_stderr_redirector = None
+
+
+class StreamToTk:
+    def __init__(self, original_stream):
+        self.original_stream = original_stream
+        self.widget = None
+
+    def set_widget(self, widget):
+        self.widget = widget
+
+    def write(self, text):
+        if not text:
+            return
+        try:
+            self.original_stream.write(text)
+        except Exception:
+            pass
+
+        w = self.widget
+        if w is None:
+            return
+
+        try:
+            w.after(0, self._append, text)
+        except Exception:
+            pass
+
+    def _append(self, text):
+        w = self.widget
+        if w is None:
+            return
+        try:
+            if not w.winfo_exists():
+                return
+            w.configure(state="normal")
+            w.insert("end", text)
+            w.see("end")
+            w.configure(state="disabled")
+        except Exception:
+            pass
+
+    def flush(self):
+        try:
+            self.original_stream.flush()
+        except Exception:
+            pass
+
+    @property
+    def encoding(self):
+        return getattr(self.original_stream, "encoding", "utf-8")
+
+
+def _ensure_log_redirectors():
+    global _stdout_redirector, _stderr_redirector
+    if _stdout_redirector is None:
+        _stdout_redirector = StreamToTk(sys.stdout)
+        sys.stdout = _stdout_redirector
+    if _stderr_redirector is None:
+        _stderr_redirector = StreamToTk(sys.stderr)
+        sys.stderr = _stderr_redirector
+
+
+def _attach_log_widget(widget):
+    _ensure_log_redirectors()
+    _stdout_redirector.set_widget(widget)
+    _stderr_redirector.set_widget(widget)
+
+
+def _ui_call(fn, *args, **kwargs):
+    """Ejecuta cambios de Tk en el hilo principal cuando sea posible."""
+    try:
+        if root_window is not None and root_window.winfo_exists():
+            root_window.after(0, lambda: fn(*args, **kwargs))
+            return
+    except Exception:
+        pass
+    try:
+        fn(*args, **kwargs)
+    except Exception:
+        pass
 
 # ── Mapa ──────────────────────────────────────────────────────────────────────
 map_widget      = None
@@ -265,6 +351,14 @@ _goto_callback  = None
 # YOLOv5
 detect_object_id = None
 yolo_model       = None
+
+# Estado del CameraService para poder detenerlo desde la UI
+camera_service_loop   = None
+camera_service_pc     = None
+camera_service_client = None
+camera_service_mode   = None
+camera_service_running = False
+camera_stop_event     = threading.Event()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -548,9 +642,17 @@ def autopilot_on_message(cli, userdata, message):
         else:
             connection_string = 'tcp:127.0.0.1:5763'
             baud = 115200
-        dron.connect(connection_string, baud, freq=10)
-        print(f'Conectado al dron ({connection_string} @ {baud})')
-        autopilot_publish_event('connected')
+        try:
+            ok = dron.connect(connection_string, baud, freq=10)
+            if ok and dron.state == 'connected':
+                print(f'Conectado al dron ({connection_string} @ {baud})')
+                autopilot_publish_event('connected')
+            else:
+                print(f'[AUTOPILOT] No se pudo conectar ({connection_string} @ {baud})')
+                autopilot_publish_event('connectError')
+        except Exception as e:
+            print(f"[AUTOPILOT] Error conectando: {e}")
+            autopilot_publish_event('connectError')
 
     elif command == 'arm_takeOff':
         if dron.state == 'connected':
@@ -647,6 +749,14 @@ class CameraTrack(VideoStreamTrack):
         vf.time_base = self._fractions.Fraction(1, 30)
         return vf
 
+    def stop(self):
+        try:
+            if self.cap and self.cap.isOpened():
+                self.cap.release()
+        except Exception:
+            pass
+        super().stop()
+
 
 def get_ice_config():
     print("[ICE] Obteniendo credenciales TURN de Metered...")
@@ -680,8 +790,15 @@ def _silence_aioice_handler(loop, context):
 
 
 async def run_camera_global(mqtt_cam_client):
+    global camera_service_pc, camera_service_loop, camera_service_client, camera_service_running
+
     pc_cam = RTCPeerConnection(configuration=get_ice_config())
-    pc_cam.addTrack(CameraTrack())
+    cam_track = CameraTrack()
+    pc_cam.addTrack(cam_track)
+    camera_service_pc = pc_cam
+    camera_service_loop = asyncio.get_event_loop()
+    camera_service_client = mqtt_cam_client
+    camera_service_running = True
 
     @pc_cam.on("connectionstatechange")
     async def _(): print(f"[CAM] WebRTC {pc_cam.connectionState}")
@@ -717,14 +834,39 @@ async def run_camera_global(mqtt_cam_client):
     }), retain=True)
     print("[CAM] Offer publicada — esperando answer del dashboard...")
 
-    await answer_event.wait()
-    print("[CAM] Conexión establecida ✓")
-
     try:
-        while True:
-            await asyncio.sleep(1)
+        while not answer_event.is_set() and not camera_stop_event.is_set():
+            await asyncio.sleep(0.1)
+
+        if camera_stop_event.is_set():
+            print("[CAM] Parada solicitada antes de completar conexión")
+            return
+
+        print("[CAM] Conexión establecida ✓")
+
+        while not camera_stop_event.is_set():
+            await asyncio.sleep(0.5)
+
     except asyncio.CancelledError:
-        await pc_cam.close()
+        pass
+    finally:
+        try:
+            await pc_cam.close()
+        except Exception:
+            pass
+        try:
+            cam_track.stop()
+        except Exception:
+            pass
+        try:
+            mqtt_cam_client.loop_stop()
+            mqtt_cam_client.disconnect()
+        except Exception:
+            pass
+        camera_service_pc = None
+        camera_service_loop = None
+        camera_service_client = None
+        camera_service_running = False
 
 
 async def _apply_answer(pc_cam, data, event):
@@ -736,30 +878,51 @@ async def _apply_answer(pc_cam, data, event):
 
 
 def start_camera_service_global():
-    def _run():
-        cam_client = mqtt.Client(client_id=f"CameraService_{_INST_SUFFIX}", transport="websockets")
-        cam_client.ws_set_options(path="/mqtt")
-        cam_client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
-        cam_client.username_pw_set(USER_DASHBOARD, PASS_DASHBOARD)
-        cam_client.connect(BROKER_DASHBOARD, PORT)
-        cam_client.loop_start()
+    global camera_service_mode, camera_service_running
 
-        loop = asyncio.new_event_loop()
-        loop.set_exception_handler(_silence_aioice_handler)
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(run_camera_global(cam_client))
+    if camera_service_running:
+        print("[CAM] CameraService ya está activo")
+        return
+
+    camera_stop_event.clear()
+    camera_service_mode = "global"
+
+    def _run():
+        try:
+            cam_client = mqtt.Client(client_id=f"CameraService_{_INST_SUFFIX}", transport="websockets")
+            cam_client.ws_set_options(path="/mqtt")
+            cam_client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
+            cam_client.username_pw_set(USER_DASHBOARD, PASS_DASHBOARD)
+            cam_client.connect(BROKER_DASHBOARD, PORT)
+            cam_client.loop_start()
+
+            loop = asyncio.new_event_loop()
+            loop.set_exception_handler(_silence_aioice_handler)
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(run_camera_global(cam_client))
+        except Exception as e:
+            print(f"[CAM] Error en CameraService global: {e}")
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
 
     threading.Thread(target=_run, daemon=True).start()
     print("[CAM] CameraService iniciado (modo global)")
 
 
 async def run_camera_local():
-    import fractions
+    global camera_service_pc, camera_service_loop, camera_service_running
     from aiortc.contrib.signaling import TcpSocketSignaling
 
     signaling = TcpSocketSignaling("0.0.0.0", TCP_PORT)
     pc_cam    = RTCPeerConnection()
-    pc_cam.addTrack(CameraTrack())
+    cam_track = CameraTrack()
+    pc_cam.addTrack(cam_track)
+    camera_service_pc = pc_cam
+    camera_service_loop = asyncio.get_event_loop()
+    camera_service_running = True
 
     @pc_cam.on("connectionstatechange")
     async def _(): print(f"[CAM] WebRTC {pc_cam.connectionState}")
@@ -783,23 +946,88 @@ async def run_camera_local():
                 print("[CAM] Fallo en la coordinación TCP")
                 break
 
-        while pc_cam.connectionState not in ("failed", "closed"):
+        while pc_cam.connectionState not in ("failed", "closed") and not camera_stop_event.is_set():
             await asyncio.sleep(1)
 
     except Exception as e:
         print(f"[CAM] Error local: {e}")
     finally:
-        await pc_cam.close()
+        try:
+            await pc_cam.close()
+        except Exception:
+            pass
+        try:
+            cam_track.stop()
+        except Exception:
+            pass
+        camera_service_pc = None
+        camera_service_loop = None
+        camera_service_running = False
 
 
 def start_camera_service_local():
+    global camera_service_mode, camera_service_running
+
+    if camera_service_running:
+        print("[CAM] CameraService ya está activo")
+        return
+
+    camera_stop_event.clear()
+    camera_service_mode = "local"
+
     def _run():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(run_camera_local())
+        try:
+            loop.run_until_complete(run_camera_local())
+        except Exception as e:
+            print(f"[CAM] Error en CameraService local: {e}")
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
 
     threading.Thread(target=_run, daemon=True).start()
     print("[CAM] CameraService iniciado (modo local)")
+
+
+def stop_camera_service():
+    """Detiene el CameraService y libera cámara/PeerConnection."""
+    global camera_service_running
+
+    if not camera_service_running and camera_service_pc is None:
+        print("[CAM] CameraService ya estaba detenido")
+        return
+
+    print("[CAM] Solicitud de desconexión de cámara...")
+    camera_stop_event.set()
+
+    # Forzar cierre inmediato del PeerConnection en su loop asíncrono.
+    loop = camera_service_loop
+    pc_cam = camera_service_pc
+    if loop is not None and pc_cam is not None:
+        async def _close_pc():
+            try:
+                await pc_cam.close()
+            except Exception:
+                pass
+
+        try:
+            asyncio.run_coroutine_threadsafe(_close_pc(), loop)
+        except Exception:
+            pass
+
+    # Cerrar cliente MQTT si el modo es global.
+    if camera_service_client is not None:
+        try:
+            camera_service_client.loop_stop()
+            camera_service_client.disconnect()
+        except Exception:
+            pass
+
+    camera_service_running = False
+    print("[CAM] Cámara desconectada")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1007,14 +1235,13 @@ def start_webrtc_dashboard():
 
 
 def on_mqtt_message_dashboard(cli, userdata, msg):
-    global pending_offer
+    global pending_offer, _connect_attempt_token
     topic = msg.topic
-    try:
-        data = json.loads(msg.payload)
-    except:
-        return
-
     if topic == T_OFFER:
+        try:
+            data = json.loads(msg.payload)
+        except Exception:
+            return
         print("[SIG] Offer recibida")
         if loop_dashboard is None or pc is None:
             pending_offer = data
@@ -1024,28 +1251,41 @@ def on_mqtt_message_dashboard(cli, userdata, msg):
         return
 
     if topic == f'autopilotServiceDemo/{MY_ORIGIN}/telemetryInfo':
-        altShowLbl['text']     = f"{round(data.get('alt', 0), 1)} m"
-        headingShowLbl['text'] = f"{round(data.get('heading', 0), 1)}°"
-        stateShowLbl['text']   = data.get('state', '')
-        speedShowLbl['text']   = f"{round(data.get('groundSpeed', 0), 1)} m/s"
-        batt = data.get('battery_remaining')
-        battShowLbl['text']    = f"{batt}%" if batt is not None else '--'
-        lat = data.get('lat'); lon = data.get('lon')
-        if lat and lon:
-            gpsShowLbl['text'] = f"{lat:.5f}\n{lon:.5f}"
-            update_map(lat, lon)
-        else:
-            gpsShowLbl['text'] = 'sin GPS'
+        try:
+            data = json.loads(msg.payload)
+        except Exception:
+            return
+
+        def _update_telemetry_ui():
+            altShowLbl['text']     = f"{round(data.get('alt', 0), 1)} m"
+            headingShowLbl['text'] = f"{round(data.get('heading', 0), 1)}°"
+            stateShowLbl['text']   = data.get('state', '')
+            speedShowLbl['text']   = f"{round(data.get('groundSpeed', 0), 1)} m/s"
+            batt = data.get('battery_remaining')
+            battShowLbl['text']    = f"{batt}%" if batt is not None else '--'
+            lat = data.get('lat'); lon = data.get('lon')
+            if lat and lon:
+                gpsShowLbl['text'] = f"{lat:.5f}\n{lon:.5f}"
+                update_map(lat, lon)
+            else:
+                gpsShowLbl['text'] = 'sin GPS'
+
+        _ui_call(_update_telemetry_ui)
     elif topic == f'autopilotServiceDemo/{MY_ORIGIN}/connected':
-        connectBtn.configure(text='Conectado', fg='white', bg='green')
+        _connect_attempt_token += 1
+        _ui_call(_set_connected_btn)
+    elif topic == f'autopilotServiceDemo/{MY_ORIGIN}/connectError':
+        _connect_attempt_token += 1
+        _ui_call(_show_connect_error)
     elif topic == f'autopilotServiceDemo/{MY_ORIGIN}/flying':
-        arm_takeOffBtn.configure(text='En el aire', fg='white', bg='green')
+        _ui_call(arm_takeOffBtn.configure, text='En vuelo', fg='white', bg='green')
     elif topic == f'autopilotServiceDemo/{MY_ORIGIN}/landed':
-        landBtn.configure(text='En tierra', fg='white', bg='green')
-        threading.Thread(target=lambda: (time.sleep(5), _reset_btns()), daemon=True).start()
+        _ui_call(arm_takeOffBtn.configure, text='Despegar', fg='black', bg='dark orange')
+        _ui_call(landBtn.configure, text='Aterrizar', fg='black', bg='dark orange')
     elif topic == f'autopilotServiceDemo/{MY_ORIGIN}/atHome':
-        RTLBtn.configure(text='En tierra', fg='white', bg='green')
-        threading.Thread(target=lambda: (time.sleep(5), _reset_btns()), daemon=True).start()
+        _ui_call(RTLBtn.configure, text='En tierra', fg='white', bg='green')
+        _ui_call(arm_takeOffBtn.configure, text='Despegar', fg='black', bg='dark orange')
+        _ui_call(landBtn.configure, text='Aterrizar', fg='black', bg='dark orange')
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1161,16 +1401,42 @@ def goto_gps_local(lat, lon):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _reset_btns():
-    for b, t in [(arm_takeOffBtn,'Armar'),(landBtn,'Aterrizar'),(RTLBtn,'RTL')]:
+    for b, t in [(arm_takeOffBtn,'Despegar'),(landBtn,'Aterrizar'),(RTLBtn,'RTL')]:
         b.configure(text=t, fg='black', bg='dark orange')
 
+def _reset_connect_btn():
+    connectBtn.configure(text='Conectar', fg='black', bg='dark orange')
+
+
+def _show_connect_error():
+    connectBtn.configure(text='Error de conexion', fg='white', bg='#c62828')
+    connectBtn.after(2000, lambda: _reset_connect_btn() if connectBtn['text'] == 'Error de conexion' else None)
+
+
+def _set_connected_btn():
+    connectBtn.configure(text='Conectado', fg='white', bg='green')
+    speedSldr.set(1)
+
 def connect_global():
+    global _connect_attempt_token
     if REAL_DRONE == False:
         client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/connect')
     else:
         client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/connect', 'REAL')
-    connectBtn.configure(text='Conectado', fg='white', bg='green')
-    speedSldr.set(1)
+    connectBtn.configure(text='Conectando...', fg='black', bg='yellow')
+    _connect_attempt_token += 1
+    my_token = _connect_attempt_token
+
+    # Si no llega evento 'connected' en un tiempo razonable, volver al estado inicial.
+    def _timeout_reset():
+        time.sleep(20)
+        try:
+            if my_token == _connect_attempt_token and connectBtn['text'] == 'Conectando...':
+                _ui_call(_show_connect_error)
+        except Exception:
+            pass
+
+    threading.Thread(target=_timeout_reset, daemon=True).start()
 
 def takeoff_global():
     client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/arm_takeOff', '5')
@@ -1197,21 +1463,35 @@ def changeHeading_global(e): client_dashboard.publish(f'{MY_ORIGIN}/autopilotSer
 def changeNavSpeed_global(e): client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/changeNavSpeed', str(speedSldr.get()))
 
 def connect_local():
-    if REAL_DRONE == False:
-        dron.connect('tcp:127.0.0.1:5763', 115200)
-    else:
-        dron.connect('COM3', 57600)
-    connectBtn.configure(text='Conectado', fg='white', bg='green')
-    speedSldr.set(1)
+    connectBtn.configure(text='Conectando...', fg='black', bg='yellow')
+    try:
+        if REAL_DRONE == False:
+            ok = dron.connect('tcp:127.0.0.1:5763', 115200)
+        else:
+            ok = dron.connect('COM3', 57600)
+
+        if ok and dron.state == 'connected':
+            connectBtn.configure(text='Conectado', fg='white', bg='green')
+            speedSldr.set(1)
+        else:
+            _show_connect_error()
+    except Exception as e:
+        print(f"[LOCAL] Error conectando: {e}")
+        _show_connect_error()
 
 def takeoff_local():
     dron.arm()
     dron.takeOff(5, blocking=False,
-                 callback=lambda: arm_takeOffBtn.configure(text='En el aire', fg='white', bg='green'))
+                 callback=lambda: arm_takeOffBtn.configure(text='En vuelo', fg='white', bg='green'))
     arm_takeOffBtn.configure(text='Despegando...', fg='black', bg='yellow')
 
 def land_local():
-    dron.Land()
+    dron.Land(blocking=False,
+              callback=lambda: (
+                  arm_takeOffBtn.configure(text='Despegar', fg='black', bg='dark orange'),
+                  landBtn.configure(text='Aterrizar', fg='black', bg='dark orange')
+              ),
+              params=None)
     landBtn.configure(text='Aterrizando...', fg='black', bg='yellow')
 
 def RTL_local():
@@ -1251,7 +1531,7 @@ def changeNavSpeed_local(e): dron.changeNavSpeed(float(speedSldr.get()))
 # ══════════════════════════════════════════════════════════════════════════════
 
 def crear_ventana(modo):
-    global client_dashboard, IS_GROUND_STATION
+    global client_dashboard, IS_GROUND_STATION, root_window
     global altShowLbl, headingShowLbl, stateShowLbl
     global speedShowLbl, battShowLbl, gpsShowLbl
     global connectBtn, arm_takeOffBtn, landBtn, RTLBtn
@@ -1293,6 +1573,7 @@ def crear_ventana(modo):
         _connect = connect_global;  _takeoff = takeoff_global
         _land    = land_global;     _RTL     = RTL_global
         _go      = go_global;       _video   = start_webrtc_dashboard
+        _stopCam = stop_camera_service
         _startT  = startTelem_global; _stopT = stopTelem_global
         _heading = changeHeading_global; _speed = changeNavSpeed_global
 
@@ -1308,12 +1589,14 @@ def crear_ventana(modo):
         _connect = connect_local;   _takeoff = takeoff_local
         _land    = land_local;      _RTL     = RTL_local
         _go      = go_local;        _video   = start_webrtc_dashboard
+        _stopCam = stop_camera_service
         _startT  = startTelem_local; _stopT  = stopTelem_local
         _heading = changeHeading_local; _speed = changeNavSpeed_local
         titulo   = "Dashboard Dron — Modo Local 🔌"
 
     # ── Ventana principal ─────────────────────────────────────────────────────
     v = tk.Tk()
+    root_window = v
     v.title(titulo)
     v.columnconfigure(0, weight=0, minsize=310)
     v.columnconfigure(1, weight=1)
@@ -1336,6 +1619,9 @@ def crear_ventana(modo):
         ctrl_row = 1; map_row = 1
     else:
         ctrl_row = 0; map_row = 0
+
+    terminal_row = map_row + 1
+    v.rowconfigure(terminal_row, weight=0)
 
     # ── Panel izquierdo: controles ────────────────────────────────────────────
     ctrl = tk.Frame(v)
@@ -1390,7 +1676,8 @@ def crear_ventana(modo):
     battShowLbl    = tk.Label(tf, text=''); battShowLbl.grid(row=1, column=4, padx=2)
     gpsShowLbl     = tk.Label(tf, text=''); gpsShowLbl.grid(row=1, column=5, padx=2)
 
-    btn("▶ Ver video del dron", _video, 10)
+    btn("▶ Ver video del dron", _video, 10, col=0, cs=1)
+    btn("⏹ Desconectar cámara", _stopCam, 10, col=1, cs=1, bg="#e14d03")
 
     df = tk.LabelFrame(ctrl, text="Detección de objetos")
     df.grid(row=11, column=0, columnspan=2, padx=5, pady=3, sticky="nsew")
@@ -1423,6 +1710,7 @@ def crear_ventana(modo):
     map_ctrl.columnconfigure(0, weight=1)
     map_ctrl.columnconfigure(1, weight=1)
     map_ctrl.columnconfigure(2, weight=1)
+    map_ctrl.columnconfigure(3, weight=1)
 
     def center_on_drone():
         if drone_lat and drone_lon:
@@ -1445,7 +1733,67 @@ def crear_ventana(modo):
                   "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png")
               ).grid(row=0, column=2, padx=3, pady=3, sticky="ew")
 
-    v.geometry("950x750")
+    # ── Terminal integrada (desplegable) ─────────────────────────────────────
+    term_frame = tk.LabelFrame(v, text="Terminal (feedback Python)")
+    term_frame.grid(row=terminal_row, column=0, columnspan=2,
+                    sticky="nsew", padx=4, pady=(0, 4))
+    term_frame.columnconfigure(0, weight=1)
+    term_frame.rowconfigure(1, weight=1)
+
+    term_header = tk.Frame(term_frame)
+    term_header.grid(row=0, column=0, sticky="ew", padx=4, pady=3)
+    term_header.columnconfigure(0, weight=0)
+    term_header.columnconfigure(1, weight=0)
+    term_header.columnconfigure(2, weight=1)
+
+    term_body = tk.Frame(term_frame)
+    term_body.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 4))
+    term_body.columnconfigure(0, weight=1)
+    term_body.rowconfigure(0, weight=1)
+
+    term_text = tk.Text(term_body, height=10, wrap="word",
+                        bg="#101010", fg="#d8d8d8", insertbackground="#d8d8d8")
+    term_text.grid(row=0, column=0, sticky="nsew")
+    term_text.configure(state="disabled")
+
+    term_scroll = tk.Scrollbar(term_body, orient="vertical", command=term_text.yview)
+    term_scroll.grid(row=0, column=1, sticky="ns")
+    term_text.configure(yscrollcommand=term_scroll.set)
+
+    term_visible = {"value": False}
+
+    def toggle_terminal():
+        term_visible["value"] = not term_visible["value"]
+        if term_visible["value"]:
+            term_body.grid()
+            toggle_btn.configure(text="Ocultar terminal")
+            toggle_term_map_btn.configure(text="Ocultar terminal")
+        else:
+            term_body.grid_remove()
+            toggle_btn.configure(text="Mostrar terminal")
+            toggle_term_map_btn.configure(text="Terminal")
+
+    toggle_btn = tk.Button(term_header, text="Mostrar terminal", bg="dark orange",
+                           command=toggle_terminal)
+    toggle_btn.grid(row=0, column=0, padx=(0, 5), sticky="w")
+
+    toggle_term_map_btn = tk.Button(map_ctrl, text="Terminal", bg="dark orange",
+                                    command=toggle_terminal)
+    toggle_term_map_btn.grid(row=0, column=3, padx=3, pady=3, sticky="ew")
+
+    tk.Button(term_header, text="Limpiar", bg="dark orange",
+              command=lambda: (
+                  term_text.configure(state="normal"),
+                  term_text.delete("1.0", "end"),
+                  term_text.configure(state="disabled")
+              )).grid(row=0, column=1, padx=(0, 5), sticky="w")
+
+    term_body.grid_remove()
+
+    _attach_log_widget(term_text)
+    print("[UI] Terminal integrada lista")
+
+    v.geometry("1100x860")
 
     # ── Liberar recursos al cerrar ────────────────────────────────────────────
     # atexit ya gestiona liberar_slot y limpiar_claim en Ctrl+C o crash,
@@ -1453,11 +1801,14 @@ def crear_ventana(modo):
     if modo == "global" and IS_GROUND_STATION:
         # Estación de Tierra (real o simulación): libera claim Y slot
         v.protocol("WM_DELETE_WINDOW",
-                   lambda: (limpiar_claim_ground_station(), liberar_slot(), v.destroy()))
+                   lambda: (stop_camera_service(), limpiar_claim_ground_station(), liberar_slot(), v.destroy()))
     elif modo == "global":
         # Cliente (real o simulación): solo libera el slot
         v.protocol("WM_DELETE_WINDOW",
-                   lambda: (liberar_slot(), v.destroy()))
+                   lambda: (stop_camera_service(), liberar_slot(), v.destroy()))
+    else:
+        # En local, al cerrar también detenemos la cámara.
+        v.protocol("WM_DELETE_WINDOW", lambda: (stop_camera_service(), v.destroy()))
 
     return v
 
