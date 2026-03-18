@@ -49,8 +49,28 @@ HIVEMQ_USERS = [
 USER_AUTOPILOT = "autopilotServiceDemo"
 PASS_AUTOPILOT = "qkdb!LasqvHfy9V"
 
-T_OFFER  = "webrtc/offer"
-T_ANSWER = "webrtc/answer"
+# Topics de señalización WebRTC — arquitectura R8 fan-out
+#
+# Solicitud de stream (cliente → CameraService):
+#   Topic fijo:  webrtc/request
+#   Payload:     MY_ORIGIN  (identifica al cliente)
+#   retain=True  para que el CameraService la reciba aunque arranque después
+#
+# Oferta (CameraService → cliente específico):
+#   Topic:  webrtc/offer/<origen>   (un topic diferente por cliente)
+#   retain=True  para que el cliente la reciba aunque haya un pequeño retraso
+#
+# Answer (cliente → CameraService):
+#   Topic:  webrtc/answer/<origen>
+#
+# Al usar un topic fijo para la solicitud evitamos los wildcards (+) que
+# algunos brokers HiveMQ Cloud restringen en el plan gratuito.
+T_CAM_REQUEST = "webrtc/request"   # topic fijo; origen va en el payload
+T_CAM_OFFER   = "webrtc/offer"     # sufijo /<origen> añadido al enviar/suscribir
+T_CAM_ANSWER  = "webrtc/answer"    # sufijo /<origen> añadido al enviar/suscribir
+
+T_OFFER  = T_CAM_OFFER
+T_ANSWER = T_CAM_ANSWER
 T_AUTOPILOT_CLAIM = "autopilot/claim"
 T_SLOT_PREFIX = "slot/ocupado/"
 
@@ -197,7 +217,7 @@ MY_ORIGIN    = f"interfazGlobal_{_INST_SUFFIX}"
 pc               = None
 loop_dashboard   = None
 client_dashboard = None
-pending_offer    = None
+# pending_offer eliminado (R8: cada cliente usa su propio topic de oferta)
 previousBtn      = None
 MODE             = None
 REAL_DRONE       = False
@@ -327,12 +347,19 @@ COCO_GRUPOS = [
 ]
 
 # ── Estado del CameraService ──────────────────────────────────────────────────
-camera_service_loop    = None
-camera_service_pc      = None
-camera_service_client  = None
-camera_service_mode    = None
+# R8: el CameraService mantiene UNA CameraTrack (captura) y N RTCPeerConnections,
+# una por cada cliente que haya solicitado el stream.
+camera_service_loop    = None          # asyncio loop del hilo del CameraService
+camera_service_client  = None          # cliente MQTT del CameraService
+camera_service_mode    = None          # "global" | "local"
 camera_service_running = False
 camera_stop_event      = threading.Event()
+# dict  origen → RTCPeerConnection  (una entrada por cliente conectado)
+_cam_peers: dict = {}
+# La instancia única de CameraTrack compartida por todos los peers
+_cam_track = None
+# Alias legacy para stop_camera_service (antes apuntaba a una sola PC)
+camera_service_pc = None   # obsoleto, se mantiene para compatibilidad
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -717,73 +744,166 @@ def _silence_aioice_handler(loop, context):
     loop.default_exception_handler(context)
 
 
-async def run_camera_global(mqtt_cam_client):
-    global camera_service_pc, camera_service_loop, camera_service_client, camera_service_running
+async def _cam_connect_peer(origen: str, mqtt_cam_client):
+    """Crea una RTCPeerConnection para el cliente `origen`, negocia la oferta
+    por topics individuales y mantiene la conexión viva.
 
-    pc_cam = RTCPeerConnection(configuration=get_ice_config())
-    cam_track = CameraTrack()
-    pc_cam.addTrack(cam_track)
-    camera_service_pc = pc_cam
-    camera_service_loop = asyncio.get_event_loop()
-    camera_service_client = mqtt_cam_client
-    camera_service_running = True
+    Protocolo:
+      1. CameraService crea una RTCPeerConnection, añade la CameraTrack compartida.
+      2. Genera una oferta y la publica en  webrtc/offer/<origen>  (retain=True).
+      3. Espera la answer del cliente en  webrtc/answer/<origen>.
+      4. Mantiene la conexión hasta que el cliente se desconecte o se solicite parada.
+    """
+    global _cam_peers, _cam_track
 
-    @pc_cam.on("connectionstatechange")
-    async def _(): print(f"[CAM] WebRTC {pc_cam.connectionState}")
+    print(f"[CAM] Nueva conexión para cliente: {origen}")
+
+    pc_peer = RTCPeerConnection(configuration=get_ice_config())
+    _cam_peers[origen] = pc_peer
+
+    # Compartir la misma CameraTrack en todos los peers
+    pc_peer.addTrack(_cam_track)
+
+    @pc_peer.on("connectionstatechange")
+    async def _on_state():
+        state = pc_peer.connectionState
+        print(f"[CAM:{origen}] WebRTC → {state}")
+        if state in ("failed", "closed", "disconnected"):
+            _cam_peers.pop(origen, None)
 
     answer_event = asyncio.Event()
-    answer_data  = {}
-    cam_loop = asyncio.get_event_loop()
+    cam_loop     = asyncio.get_event_loop()
+    t_offer_peer  = f"{T_CAM_OFFER}/{origen}"
+    t_answer_peer = f"{T_CAM_ANSWER}/{origen}"
 
-    def on_answer(cli, userdata, msg):
-        if msg.topic == T_ANSWER:
-            answer_data["sdp"] = json.loads(msg.payload)
+    # Escuchar la answer de este cliente concreto
+    def _on_mqtt(cli, userdata, msg):
+        if msg.topic == t_answer_peer:
+            try:
+                data = json.loads(msg.payload)
+            except Exception:
+                return
             asyncio.run_coroutine_threadsafe(
-                _apply_answer(pc_cam, answer_data["sdp"], answer_event),
+                _apply_answer_peer(pc_peer, data, answer_event),
                 cam_loop
             )
 
-    mqtt_cam_client.on_message = on_answer
-    mqtt_cam_client.subscribe(T_ANSWER)
+    mqtt_cam_client.message_callback_add(t_answer_peer, _on_mqtt)
+    mqtt_cam_client.subscribe(t_answer_peer)
 
-    await pc_cam.setLocalDescription(await pc_cam.createOffer())
-    print("[CAM] Esperando ICE gathering...")
-    while pc_cam.iceGatheringState != "complete":
+    # Crear oferta
+    await pc_peer.setLocalDescription(await pc_peer.createOffer())
+    print(f"[CAM:{origen}] Esperando ICE gathering...")
+    while pc_peer.iceGatheringState != "complete":
         await asyncio.sleep(0.2)
 
-    candidates = [l for l in pc_cam.localDescription.sdp.splitlines()
+    candidates = [l for l in pc_peer.localDescription.sdp.splitlines()
                   if l.startswith("a=candidate")]
     has_relay = any("relay" in c for c in candidates)
-    print(f"[CAM] {len(candidates)} candidates — {'✓ relay presente' if has_relay else '⚠ sin relay'}")
+    print(f"[CAM:{origen}] {len(candidates)} candidates — "
+          f"{'✓ relay' if has_relay else '⚠ sin relay'}")
 
-    mqtt_cam_client.publish(T_OFFER, json.dumps({
-        "sdp":  pc_cam.localDescription.sdp,
-        "type": pc_cam.localDescription.type,
+    # Publicar oferta con retain=True para que el cliente la reciba aunque
+    # se conecte después de que el CameraService la haya publicado
+    mqtt_cam_client.publish(t_offer_peer, json.dumps({
+        "sdp":  pc_peer.localDescription.sdp,
+        "type": pc_peer.localDescription.type,
     }), retain=True)
-    print("[CAM] Offer publicada — esperando answer del dashboard...")
+    print(f"[CAM:{origen}] Oferta publicada → {t_offer_peer}")
+
+    # Esperar answer
+    try:
+        await asyncio.wait_for(answer_event.wait(), timeout=30.0)
+        print(f"[CAM:{origen}] Conexión establecida ✓")
+    except asyncio.TimeoutError:
+        print(f"[CAM:{origen}] Timeout esperando answer — descartando peer")
+        _cam_peers.pop(origen, None)
+        await pc_peer.close()
+        return
+
+    # Mantener viva hasta desconexión o parada global
+    while (not camera_stop_event.is_set()
+           and pc_peer.connectionState not in ("failed", "closed", "disconnected")):
+        await asyncio.sleep(1)
 
     try:
-        while not answer_event.is_set() and not camera_stop_event.is_set():
-            await asyncio.sleep(0.1)
+        await pc_peer.close()
+    except Exception:
+        pass
+    _cam_peers.pop(origen, None)
+    print(f"[CAM:{origen}] Peer cerrado")
 
-        if camera_stop_event.is_set():
-            print("[CAM] Parada solicitada antes de completar conexión")
+
+async def _apply_answer_peer(pc_peer, data, event):
+    """Aplica la answer de un cliente a su RTCPeerConnection."""
+    try:
+        await pc_peer.setRemoteDescription(
+            RTCSessionDescription(sdp=data["sdp"], type=data["type"])
+        )
+        print("[CAM] Answer aplicada ✓")
+        event.set()
+    except Exception as e:
+        print(f"[CAM] Error aplicando answer: {e}")
+
+
+async def run_camera_global(mqtt_cam_client):
+    """Bucle principal del CameraService en modo global.
+
+    - Abre la cámara UNA SOLA VEZ (CameraTrack compartida).
+    - Escucha solicitudes de clientes en  webrtc/request/+
+    - Por cada solicitud lanza _cam_connect_peer() en una tarea asyncio independiente.
+    - Permite N clientes simultáneos sin ningún límite adicional.
+    """
+    global camera_service_loop, camera_service_client, camera_service_running
+    global _cam_track, _cam_peers
+
+    camera_service_loop   = asyncio.get_event_loop()
+    camera_service_client = mqtt_cam_client
+    camera_service_running = True
+    _cam_peers = {}
+
+    # Instanciar la cámara UNA sola vez para todos los clientes
+    _cam_track = CameraTrack()
+    print("[CAM] Cámara abierta — esperando solicitudes de clientes...")
+
+    cam_loop = asyncio.get_event_loop()
+    def _on_request(cli, userdata, msg):
+        """Callback MQTT: llega cuando un cliente publica en webrtc/request.
+        El payload contiene el MY_ORIGIN del cliente que pide stream.
+        """
+        try:
+            origen = msg.payload.decode("utf-8").strip()
+        except Exception:
             return
+        if not origen:
+            return
+        if origen in _cam_peers:
+            print(f"[CAM] Solicitud de {origen} ignorada — peer ya existe")
+            return
+        print(f"[CAM] Solicitud de stream de: {origen}")
+        asyncio.run_coroutine_threadsafe(
+            _cam_connect_peer(origen, mqtt_cam_client),
+            cam_loop
+        )
 
-        print("[CAM] Conexión establecida ✓")
+    mqtt_cam_client.message_callback_add(T_CAM_REQUEST, _on_request)
+    mqtt_cam_client.subscribe(T_CAM_REQUEST)
+    print(f"[CAM] Suscrito a solicitudes en {T_CAM_REQUEST}")
 
+    try:
         while not camera_stop_event.is_set():
             await asyncio.sleep(0.5)
-
     except asyncio.CancelledError:
         pass
     finally:
+        # Cerrar todos los peers activos
+        print(f"[CAM] Cerrando {len(_cam_peers)} peer(s)...")
+        close_tasks = [pc.close() for pc in list(_cam_peers.values())]
+        if close_tasks:
+            await asyncio.gather(*close_tasks, return_exceptions=True)
+        _cam_peers.clear()
         try:
-            await pc_cam.close()
-        except Exception:
-            pass
-        try:
-            cam_track.stop()
+            _cam_track.stop()
         except Exception:
             pass
         try:
@@ -791,18 +911,10 @@ async def run_camera_global(mqtt_cam_client):
             mqtt_cam_client.disconnect()
         except Exception:
             pass
-        camera_service_pc = None
-        camera_service_loop = None
+        camera_service_loop   = None
         camera_service_client = None
         camera_service_running = False
-
-
-async def _apply_answer(pc_cam, data, event):
-    await pc_cam.setRemoteDescription(
-        RTCSessionDescription(sdp=data["sdp"], type=data["type"])
-    )
-    print("[CAM] Answer aplicada ✓")
-    event.set()
+        print("[CAM] CameraService detenido")
 
 
 def start_camera_service_global():
@@ -921,26 +1033,25 @@ def start_camera_service_local():
 
 
 def stop_camera_service():
-    """Detiene el CameraService y libera cámara/PeerConnection."""
+    """Detiene el CameraService y libera cámara + todos los PeerConnections."""
     global camera_service_running
 
-    if not camera_service_running and camera_service_pc is None:
+    if not camera_service_running and not _cam_peers and _cam_track is None:
         print("[CAM] CameraService ya estaba detenido")
         return
 
-    print("[CAM] Solicitud de desconexión de cámara...")
+    print(f"[CAM] Solicitud de parada ({len(_cam_peers)} peer(s) activos)...")
     camera_stop_event.set()
 
-    loop   = camera_service_loop
-    pc_cam = camera_service_pc
-    if loop is not None and pc_cam is not None:
-        async def _close_pc():
-            try:
-                await pc_cam.close()
-            except Exception:
-                pass
+    # Cerrar todos los peers desde el loop asíncrono del CameraService
+    loop = camera_service_loop
+    if loop is not None:
+        async def _close_all():
+            tasks = [pc.close() for pc in list(_cam_peers.values())]
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
         try:
-            asyncio.run_coroutine_threadsafe(_close_pc(), loop)
+            asyncio.run_coroutine_threadsafe(_close_all(), loop)
         except Exception:
             pass
 
@@ -1050,7 +1161,17 @@ async def show_video(track):
 
 
 def webrtc_thread_dashboard():
-    global pc, loop_dashboard, pending_offer
+    """Hilo receptor de vídeo del dashboard en modo global.
+
+    Protocolo R8 — fan-out desde un único CameraService centralizado:
+      1. Publica MY_ORIGIN en  webrtc/request/<MY_ORIGIN>  para solicitar su stream.
+      2. Suscribe a  webrtc/offer/<MY_ORIGIN>  donde el CameraService enviará
+         una RTCPeerConnection dedicada a este cliente.
+      3. Responde con su answer en  webrtc/answer/<MY_ORIGIN>.
+    Cada instancia del dashboard recibe el mismo stream del dron sin
+    interferir con las demás.
+    """
+    global pc, loop_dashboard
 
     loop_dashboard = asyncio.new_event_loop()
     asyncio.set_event_loop(loop_dashboard)
@@ -1070,12 +1191,42 @@ def webrtc_thread_dashboard():
     @pc.on("iceconnectionstatechange")
     async def _(): print(f"[ICE] {pc.iceConnectionState}")
 
-    print("[WebRTC] Dashboard listo (global)")
-    if pending_offer:
-        asyncio.run_coroutine_threadsafe(
-            handle_offer_dashboard(pending_offer), loop_dashboard)
-        pending_offer = None
+    # Topics individuales de esta instancia
+    # - Solicitud: topic FIJO webrtc/request, origen en el payload
+    # - Oferta/Answer: topic por instancia  webrtc/offer/<origen> | webrtc/answer/<origen>
+    t_my_offer   = f"{T_CAM_OFFER}/{MY_ORIGIN}"
+    t_my_answer  = f"{T_CAM_ANSWER}/{MY_ORIGIN}"
+    t_my_request = T_CAM_REQUEST          # topic fijo; payload = MY_ORIGIN
 
+    def _on_offer(cli, userdata, msg):
+        if msg.topic == t_my_offer and msg.payload:
+            try:
+                data = json.loads(msg.payload)
+            except Exception:
+                return
+            print(f"[SIG] Oferta recibida en {t_my_offer}")
+            asyncio.run_coroutine_threadsafe(
+                handle_offer_dashboard(data, t_my_answer), loop_dashboard)
+
+    # Callback específico para el topic de oferta de esta instancia
+    client_dashboard.message_callback_add(t_my_offer, _on_offer)
+    client_dashboard.subscribe(t_my_offer)
+
+    # Anunciarse al CameraService con retain=True para que la reciba aunque
+    # arranque un poco después.
+    client_dashboard.publish(t_my_request, MY_ORIGIN, retain=True)
+    print(f"[WebRTC] Solicitud enviada a {t_my_request} (payload={MY_ORIGIN})")
+
+    # Reenviar cada 5 s hasta tener vídeo (por si el CameraService tardó en suscribirse)
+    async def _retry_request():
+        for _ in range(12):   # hasta 60 s
+            await asyncio.sleep(5)
+            if pc.connectionState in ("connected", "connecting"):
+                break
+            print(f"[WebRTC] Re-solicitud → {t_my_request}")
+            client_dashboard.publish(t_my_request, MY_ORIGIN, retain=True)
+
+    asyncio.run_coroutine_threadsafe(_retry_request(), loop_dashboard)
     loop_dashboard.run_forever()
 
 
@@ -1162,7 +1313,8 @@ def webrtc_thread_dashboard_local():
         print(f"[VIDEO] Hilo local terminó: {e}")
 
 
-async def handle_offer_dashboard(data):
+async def handle_offer_dashboard(data, t_answer: str):
+    """Aplica la oferta del CameraService y envía la answer por el topic correcto."""
     await pc.setRemoteDescription(
         RTCSessionDescription(sdp=data["sdp"], type=data["type"])
     )
@@ -1178,11 +1330,11 @@ async def handle_offer_dashboard(data):
     has_relay = any("relay" in c for c in candidates)
     print(f"[WebRTC] Answer lista — {'✓ relay' if has_relay else '⚠ sin relay'}")
 
-    client_dashboard.publish(T_ANSWER, json.dumps({
+    client_dashboard.publish(t_answer, json.dumps({
         "sdp":  pc.localDescription.sdp,
         "type": pc.localDescription.type,
     }))
-    print("[WebRTC] Answer enviada ✓")
+    print(f"[WebRTC] Answer enviada → {t_answer} ✓")
 
 
 def start_webrtc_dashboard():
@@ -1193,21 +1345,8 @@ def start_webrtc_dashboard():
 
 
 def on_mqtt_message_dashboard(cli, userdata, msg):
-    global pending_offer, _connect_attempt_token
+    global _connect_attempt_token
     topic = msg.topic
-
-    if topic == T_OFFER:
-        try:
-            data = json.loads(msg.payload)
-        except Exception:
-            return
-        print("[SIG] Offer recibida")
-        if loop_dashboard is None or pc is None:
-            pending_offer = data
-        else:
-            asyncio.run_coroutine_threadsafe(
-                handle_offer_dashboard(data), loop_dashboard)
-        return
 
     if topic == f'autopilotServiceDemo/{MY_ORIGIN}/telemetryInfo':
         try:
@@ -1581,7 +1720,12 @@ def crear_ventana(modo):
         else:
             print("[MAIN] AutopilotService omitido (Cliente)")
 
-        start_camera_service_global()
+        # R8: el CameraService centralizado solo corre en la Estación de Tierra.
+        # Los clientes NO abren cámara — se conectan al stream de la EdT.
+        if IS_GROUND_STATION:
+            start_camera_service_global()
+        else:
+            print("[CAM] Cliente — esperando stream de la Estación de Tierra")
 
         client_dashboard = mqtt.Client(client_id=f"Dashboard_{_INST_SUFFIX}", transport="websockets")
         client_dashboard.ws_set_options(path="/mqtt")
@@ -1591,7 +1735,7 @@ def crear_ventana(modo):
         client_dashboard.on_connect = lambda c,u,f,rc: print("[MQTT] Dashboard conectado" if rc==0 else f"[MQTT] Error {rc}")
         client_dashboard.connect(BROKER_DASHBOARD, PORT)
         client_dashboard.subscribe(f'autopilotServiceDemo/{MY_ORIGIN}/#')
-        client_dashboard.subscribe(T_OFFER)
+        # T_OFFER genérico eliminado (R8): cada instancia usa webrtc/offer/<MY_ORIGIN>
         client_dashboard.loop_start()
 
         _connect = connect_global;  _takeoff = takeoff_global
