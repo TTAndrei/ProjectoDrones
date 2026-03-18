@@ -1,16 +1,16 @@
 ﻿namespace Formulario
 {
-    partial class Form1
+    partial class Form2
     {
         /// <summary>
-        /// Variable del diseñador necesaria.
+        /// Required designer variable.
         /// </summary>
         private System.ComponentModel.IContainer components = null;
 
         /// <summary>
-        /// Limpiar los recursos que se estén usando.
+        /// Clean up any resources being used.
         /// </summary>
-        /// <param name="disposing">true si los recursos administrados se deben desechar; false en caso contrario.</param>
+        /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
         protected override void Dispose(bool disposing)
         {
             if (disposing && (components != null))
@@ -20,14 +20,15 @@
             base.Dispose(disposing);
         }
 
-        #region Código generado por el Diseñador de Windows Forms
+        #region Windows Form Designer generated code
 
         /// <summary>
-        /// Método necesario para admitir el Diseñador. No se puede modificar
-        /// el contenido de este método con el editor de código.
+        /// Required method for Designer support - do not modify
+        /// the contents of this method with the code editor.
         /// </summary>
         private void InitializeComponent()
         {
+            this.ir_al_punto = new System.Windows.Forms.Button();
             this.label4 = new System.Windows.Forms.Label();
             this.headingTrackBar = new System.Windows.Forms.TrackBar();
             this.headingLbl = new System.Windows.Forms.Label();
@@ -67,12 +68,9 @@
             this.label1 = new System.Windows.Forms.Label();
             this.alturaBox = new System.Windows.Forms.TextBox();
             this.but_connect = new System.Windows.Forms.Button();
-            this.button7 = new System.Windows.Forms.Button();
+            this.landBtn = new System.Windows.Forms.Button();
             this.despegarBtn = new System.Windows.Forms.Button();
-            this.button6 = new System.Windows.Forms.Button();
-            this.menuStrip1 = new System.Windows.Forms.MenuStrip();
-            this.ir_al_punto = new System.Windows.Forms.Button();
-            this.comboPuerto = new System.Windows.Forms.ComboBox();
+            this.RTLBtn = new System.Windows.Forms.Button();
             ((System.ComponentModel.ISupportInitialize)(this.headingTrackBar)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.velocidadTrackBar)).BeginInit();
             this.groupBox4.SuspendLayout();
@@ -81,25 +79,38 @@
             ((System.ComponentModel.ISupportInitialize)(this.altitudebar)).BeginInit();
             this.SuspendLayout();
             // 
+            // ir_al_punto
+            // 
+            this.ir_al_punto.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(255)))), ((int)(((byte)(192)))), ((int)(((byte)(128)))));
+            this.ir_al_punto.Font = new System.Drawing.Font("Microsoft Sans Serif", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.ir_al_punto.Location = new System.Drawing.Point(357, 720);
+            this.ir_al_punto.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
+            this.ir_al_punto.Name = "ir_al_punto";
+            this.ir_al_punto.Size = new System.Drawing.Size(147, 48);
+            this.ir_al_punto.TabIndex = 50;
+            this.ir_al_punto.Text = "ir al punto";
+            this.ir_al_punto.UseVisualStyleBackColor = false;
+            this.ir_al_punto.Click += new System.EventHandler(this.ir_al_punto_Click);
+            // 
             // label4
             // 
             this.label4.AutoSize = true;
             this.label4.Font = new System.Drawing.Font("Microsoft Sans Serif", 9.75F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.label4.Location = new System.Drawing.Point(498, 208);
+            this.label4.Location = new System.Drawing.Point(492, 183);
             this.label4.Margin = new System.Windows.Forms.Padding(4, 0, 4, 0);
             this.label4.Name = "label4";
             this.label4.Size = new System.Drawing.Size(85, 25);
-            this.label4.TabIndex = 39;
+            this.label4.TabIndex = 49;
             this.label4.Text = "Heading";
             // 
             // headingTrackBar
             // 
-            this.headingTrackBar.Location = new System.Drawing.Point(428, 265);
+            this.headingTrackBar.Location = new System.Drawing.Point(422, 240);
             this.headingTrackBar.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
             this.headingTrackBar.Maximum = 360;
             this.headingTrackBar.Name = "headingTrackBar";
             this.headingTrackBar.Size = new System.Drawing.Size(272, 69);
-            this.headingTrackBar.TabIndex = 34;
+            this.headingTrackBar.TabIndex = 44;
             this.headingTrackBar.Scroll += new System.EventHandler(this.headingTrackBar_Scroll);
             this.headingTrackBar.MouseUp += new System.Windows.Forms.MouseEventHandler(this.headingTrackBar_MouseUp);
             // 
@@ -108,11 +119,11 @@
             this.headingLbl.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
             this.headingLbl.Font = new System.Drawing.Font("Microsoft Sans Serif", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.headingLbl.ForeColor = System.Drawing.Color.Red;
-            this.headingLbl.Location = new System.Drawing.Point(414, 209);
+            this.headingLbl.Location = new System.Drawing.Point(408, 184);
             this.headingLbl.Margin = new System.Windows.Forms.Padding(4, 0, 4, 0);
             this.headingLbl.Name = "headingLbl";
             this.headingLbl.Size = new System.Drawing.Size(72, 30);
-            this.headingLbl.TabIndex = 35;
+            this.headingLbl.TabIndex = 45;
             this.headingLbl.Text = "0";
             this.headingLbl.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
@@ -120,11 +131,11 @@
             // 
             this.label9.AutoSize = true;
             this.label9.Font = new System.Drawing.Font("Microsoft Sans Serif", 9.75F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.label9.Location = new System.Drawing.Point(498, 97);
+            this.label9.Location = new System.Drawing.Point(492, 72);
             this.label9.Margin = new System.Windows.Forms.Padding(4, 0, 4, 0);
             this.label9.Name = "label9";
             this.label9.Size = new System.Drawing.Size(99, 25);
-            this.label9.TabIndex = 38;
+            this.label9.TabIndex = 48;
             this.label9.Text = "Velocidad";
             // 
             // velocidadLbl
@@ -132,21 +143,21 @@
             this.velocidadLbl.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
             this.velocidadLbl.Font = new System.Drawing.Font("Microsoft Sans Serif", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.velocidadLbl.ForeColor = System.Drawing.Color.Red;
-            this.velocidadLbl.Location = new System.Drawing.Point(411, 89);
+            this.velocidadLbl.Location = new System.Drawing.Point(405, 64);
             this.velocidadLbl.Margin = new System.Windows.Forms.Padding(4, 0, 4, 0);
             this.velocidadLbl.Name = "velocidadLbl";
             this.velocidadLbl.Size = new System.Drawing.Size(72, 36);
-            this.velocidadLbl.TabIndex = 37;
+            this.velocidadLbl.TabIndex = 47;
             this.velocidadLbl.Text = "0";
             this.velocidadLbl.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
             // velocidadTrackBar
             // 
-            this.velocidadTrackBar.Location = new System.Drawing.Point(428, 138);
+            this.velocidadTrackBar.Location = new System.Drawing.Point(422, 113);
             this.velocidadTrackBar.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
             this.velocidadTrackBar.Name = "velocidadTrackBar";
             this.velocidadTrackBar.Size = new System.Drawing.Size(272, 69);
-            this.velocidadTrackBar.TabIndex = 36;
+            this.velocidadTrackBar.TabIndex = 46;
             this.velocidadTrackBar.Scroll += new System.EventHandler(this.velocidadTrackBar_Scroll);
             this.velocidadTrackBar.MouseUp += new System.Windows.Forms.MouseEventHandler(this.velocidadTrackBar_MouseUp);
             // 
@@ -163,12 +174,12 @@
             this.groupBox4.Controls.Add(this.button22);
             this.groupBox4.Controls.Add(this.button23);
             this.groupBox4.Font = new System.Drawing.Font("Microsoft Sans Serif", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.groupBox4.Location = new System.Drawing.Point(375, 352);
+            this.groupBox4.Location = new System.Drawing.Point(369, 327);
             this.groupBox4.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
             this.groupBox4.Name = "groupBox4";
             this.groupBox4.Padding = new System.Windows.Forms.Padding(4, 5, 4, 5);
             this.groupBox4.Size = new System.Drawing.Size(416, 320);
-            this.groupBox4.TabIndex = 30;
+            this.groupBox4.TabIndex = 41;
             this.groupBox4.TabStop = false;
             this.groupBox4.Text = "Telemetría";
             // 
@@ -289,12 +300,12 @@
             this.groupBox2.Controls.Add(this.button10);
             this.groupBox2.Controls.Add(this.button9);
             this.groupBox2.Font = new System.Drawing.Font("Microsoft Sans Serif", 15.75F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.groupBox2.Location = new System.Drawing.Point(22, 392);
+            this.groupBox2.Location = new System.Drawing.Point(16, 367);
             this.groupBox2.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
             this.groupBox2.Name = "groupBox2";
             this.groupBox2.Padding = new System.Windows.Forms.Padding(4, 5, 4, 5);
             this.groupBox2.Size = new System.Drawing.Size(332, 400);
-            this.groupBox2.TabIndex = 32;
+            this.groupBox2.TabIndex = 43;
             this.groupBox2.TabStop = false;
             this.groupBox2.Text = "Movimiento";
             // 
@@ -481,17 +492,16 @@
             this.groupBox1.Controls.Add(this.label1);
             this.groupBox1.Controls.Add(this.alturaBox);
             this.groupBox1.Controls.Add(this.but_connect);
-            this.groupBox1.Controls.Add(this.button7);
+            this.groupBox1.Controls.Add(this.landBtn);
             this.groupBox1.Controls.Add(this.despegarBtn);
-            this.groupBox1.Controls.Add(this.button6);
-            this.groupBox1.Controls.Add(this.comboPuerto);
+            this.groupBox1.Controls.Add(this.RTLBtn);
             this.groupBox1.Font = new System.Drawing.Font("Microsoft Sans Serif", 15.75F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.groupBox1.Location = new System.Drawing.Point(22, 63);
+            this.groupBox1.Location = new System.Drawing.Point(16, 38);
             this.groupBox1.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
             this.groupBox1.Name = "groupBox1";
             this.groupBox1.Padding = new System.Windows.Forms.Padding(4, 5, 4, 5);
             this.groupBox1.Size = new System.Drawing.Size(332, 320);
-            this.groupBox1.TabIndex = 31;
+            this.groupBox1.TabIndex = 42;
             this.groupBox1.TabStop = false;
             this.groupBox1.Text = "Control";
             // 
@@ -538,18 +548,18 @@
             this.but_connect.UseVisualStyleBackColor = false;
             this.but_connect.Click += new System.EventHandler(this.but_connect_Click);
             // 
-            // button7
+            // landBtn
             // 
-            this.button7.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(255)))), ((int)(((byte)(192)))), ((int)(((byte)(128)))));
-            this.button7.Font = new System.Drawing.Font("Microsoft Sans Serif", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.button7.Location = new System.Drawing.Point(9, 251);
-            this.button7.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
-            this.button7.Name = "button7";
-            this.button7.Size = new System.Drawing.Size(147, 48);
-            this.button7.TabIndex = 13;
-            this.button7.Text = "Aterrizar";
-            this.button7.UseVisualStyleBackColor = false;
-            this.button7.Click += new System.EventHandler(this.aterrizarBtn_Click);
+            this.landBtn.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(255)))), ((int)(((byte)(192)))), ((int)(((byte)(128)))));
+            this.landBtn.Font = new System.Drawing.Font("Microsoft Sans Serif", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.landBtn.Location = new System.Drawing.Point(9, 251);
+            this.landBtn.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
+            this.landBtn.Name = "landBtn";
+            this.landBtn.Size = new System.Drawing.Size(147, 48);
+            this.landBtn.TabIndex = 13;
+            this.landBtn.Text = "Aterrizar";
+            this.landBtn.UseVisualStyleBackColor = false;
+            this.landBtn.Click += new System.EventHandler(this.aterrizarBtn_Click);
             // 
             // despegarBtn
             // 
@@ -564,58 +574,24 @@
             this.despegarBtn.UseVisualStyleBackColor = false;
             this.despegarBtn.Click += new System.EventHandler(this.but_takeoff_Click);
             // 
-            // button6
+            // RTLBtn
             // 
-            this.button6.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(255)))), ((int)(((byte)(192)))), ((int)(((byte)(128)))));
-            this.button6.Font = new System.Drawing.Font("Microsoft Sans Serif", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.button6.Location = new System.Drawing.Point(165, 251);
-            this.button6.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
-            this.button6.Name = "button6";
-            this.button6.Size = new System.Drawing.Size(148, 48);
-            this.button6.TabIndex = 10;
-            this.button6.Text = "RTL";
-            this.button6.UseVisualStyleBackColor = false;
-            this.button6.Click += new System.EventHandler(this.RTLBtn_Click);
+            this.RTLBtn.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(255)))), ((int)(((byte)(192)))), ((int)(((byte)(128)))));
+            this.RTLBtn.Font = new System.Drawing.Font("Microsoft Sans Serif", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.RTLBtn.Location = new System.Drawing.Point(165, 251);
+            this.RTLBtn.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
+            this.RTLBtn.Name = "RTLBtn";
+            this.RTLBtn.Size = new System.Drawing.Size(148, 48);
+            this.RTLBtn.TabIndex = 10;
+            this.RTLBtn.Text = "RTL";
+            this.RTLBtn.UseVisualStyleBackColor = false;
+            this.RTLBtn.Click += new System.EventHandler(this.RTLBtn_Click);
             // 
-            // menuStrip1
-            // 
-            this.menuStrip1.GripMargin = new System.Windows.Forms.Padding(2, 2, 0, 2);
-            this.menuStrip1.ImageScalingSize = new System.Drawing.Size(24, 24);
-            this.menuStrip1.Location = new System.Drawing.Point(0, 0);
-            this.menuStrip1.Name = "menuStrip1";
-            this.menuStrip1.Padding = new System.Windows.Forms.Padding(6, 2, 0, 2);
-            this.menuStrip1.Size = new System.Drawing.Size(830, 36);
-            this.menuStrip1.TabIndex = 33;
-            this.menuStrip1.Text = "menuStrip1";
-            // 
-            // ir_al_punto
-            // 
-            this.ir_al_punto.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(255)))), ((int)(((byte)(192)))), ((int)(((byte)(128)))));
-            this.ir_al_punto.Font = new System.Drawing.Font("Microsoft Sans Serif", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.ir_al_punto.Location = new System.Drawing.Point(363, 745);
-            this.ir_al_punto.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
-            this.ir_al_punto.Name = "ir_al_punto";
-            this.ir_al_punto.Size = new System.Drawing.Size(147, 48);
-            this.ir_al_punto.TabIndex = 40;
-            this.ir_al_punto.Text = "ir al punto";
-            this.ir_al_punto.UseVisualStyleBackColor = false;
-            this.ir_al_punto.Click += new System.EventHandler(this.ir_al_punto_Click);
-            // 
-            // comboPuerto
-            // 
-            this.comboPuerto.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
-            this.comboPuerto.Font = new System.Drawing.Font("Microsoft Sans Serif", 10F);
-            this.comboPuerto.Location = new System.Drawing.Point(9, 238);
-            this.comboPuerto.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
-            this.comboPuerto.Name = "comboPuerto";
-            this.comboPuerto.Size = new System.Drawing.Size(302, 33);
-            this.comboPuerto.TabIndex = 41;
-            // 
-            // Form1
+            // Form2
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(9F, 20F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(830, 811);
+            this.ClientSize = new System.Drawing.Size(800, 807);
             this.Controls.Add(this.ir_al_punto);
             this.Controls.Add(this.label4);
             this.Controls.Add(this.headingTrackBar);
@@ -626,11 +602,8 @@
             this.Controls.Add(this.groupBox4);
             this.Controls.Add(this.groupBox2);
             this.Controls.Add(this.groupBox1);
-            this.Controls.Add(this.menuStrip1);
-            this.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
-            this.Name = "Form1";
-            this.Text = "Form1";
-            this.Load += new System.EventHandler(this.Form1_Load);
+            this.Name = "Form2";
+            this.Text = "Form2";
             ((System.ComponentModel.ISupportInitialize)(this.headingTrackBar)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.velocidadTrackBar)).EndInit();
             this.groupBox4.ResumeLayout(false);
@@ -647,6 +620,7 @@
 
         #endregion
 
+        private System.Windows.Forms.Button ir_al_punto;
         private System.Windows.Forms.Label label4;
         private System.Windows.Forms.TrackBar headingTrackBar;
         private System.Windows.Forms.Label headingLbl;
@@ -665,6 +639,12 @@
         private System.Windows.Forms.Button button22;
         private System.Windows.Forms.Button button23;
         private System.Windows.Forms.GroupBox groupBox2;
+        private System.Windows.Forms.Label label11;
+        private System.Windows.Forms.Label label10;
+        private System.Windows.Forms.Label label8;
+        private System.Windows.Forms.TextBox altitudeBox;
+        private System.Windows.Forms.TextBox LonBox;
+        private System.Windows.Forms.TextBox LatBox;
         private System.Windows.Forms.Label label6;
         private System.Windows.Forms.Button button17;
         private System.Windows.Forms.Button button16;
@@ -676,22 +656,12 @@
         private System.Windows.Forms.Button button10;
         private System.Windows.Forms.Button button9;
         private System.Windows.Forms.GroupBox groupBox1;
+        private System.Windows.Forms.TrackBar altitudebar;
         private System.Windows.Forms.Label label1;
         private System.Windows.Forms.TextBox alturaBox;
         private System.Windows.Forms.Button but_connect;
-        private System.Windows.Forms.Button button7;
+        private System.Windows.Forms.Button landBtn;
         private System.Windows.Forms.Button despegarBtn;
-        private System.Windows.Forms.Button button6;
-        private System.Windows.Forms.MenuStrip menuStrip1;
-        private System.Windows.Forms.TrackBar altitudebar;
-        private System.Windows.Forms.Button ir_al_punto;
-        private System.Windows.Forms.TextBox altitudeBox;
-        private System.Windows.Forms.TextBox LonBox;
-        private System.Windows.Forms.TextBox LatBox;
-        private System.Windows.Forms.Label label11;
-        private System.Windows.Forms.Label label10;
-        private System.Windows.Forms.Label label8;
-        private System.Windows.Forms.ComboBox comboPuerto;
+        private System.Windows.Forms.Button RTLBtn;
     }
 }
-
