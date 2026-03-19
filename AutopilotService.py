@@ -38,8 +38,8 @@ def on_message(cli, userdata, message):
             baud = 57600
         else:
             # por defecto conectarse al simulador TCP
-            connection_string = 'COM3' #'tcp:127.0.0.1:5763'
-            baud = 57600 #115200
+            connection_string = 'tcp:127.0.0.1:5763'
+            baud = 115200
         dron.connect(connection_string, baud, freq=10)
         print(f'Conectado al dron ({connection_string} @ {baud})')
         publish_event('connected')
@@ -70,6 +70,7 @@ def on_message(cli, userdata, message):
     if command == 'startTelemetry':
         # indico qué función va a procesar los datos de telemetría cuando se reciban
         dron.send_telemetry_info(publish_telemetry_info)
+        print ('Empezamos a enviar información de telemetría')
 
     if command == 'stopTelemetry':
         dron.stop_sending_telemetry_info()
@@ -81,6 +82,23 @@ def on_message(cli, userdata, message):
     if command == 'changeNavSpeed':
         speed = float(message.payload.decode("utf-8"))
         dron.changeNavSpeed(speed)
+    
+    if command == 'changeAltitude':
+        altitud = float(message.payload.decode("utf-8"))
+        dron.changeAltitud(altitud)
+    
+    if command == 'goTo':
+        # el payload tiene el formato "lat,lon,alt"
+        payload = message.payload.decode("utf-8")
+        try:
+            # Separar por "/"
+            partes = payload.split('/')
+
+            # Cambiar coma por punto y convertir a float
+            lat, lon, alt = [float(p.replace(',', '.')) for p in partes]
+            dron.goto(lat, lon, alt, blocking=False)
+        except Exception as e:
+            print(f"Error al procesar el comando goTo con payload '{payload}': {e}")
 
 
 def on_connect(client, userdata, flags, rc):
