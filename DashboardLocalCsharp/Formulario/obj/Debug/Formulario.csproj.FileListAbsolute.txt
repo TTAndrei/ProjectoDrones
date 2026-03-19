@@ -35,3 +35,9 @@ C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\bin
 C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Formulario.pdb
 C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\csDronLink.dll
 C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\obj\Debug\Formulario.csproj.Up2Date
+C:\Users\arnau\Source\Repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\obj\Debug\Formulario.exe.config
+C:\Users\arnau\Source\Repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\obj\Debug\Formulario.Form2.resources
+C:\Users\arnau\Source\Repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\MQTTnet.dll
+C:\Users\arnau\Source\Repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Newtonsoft.Json.dll
+C:\Users\arnau\Source\Repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Newtonsoft.Json.xml
+C:\Users\arnau\Source\Repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Assets\drone-logoC.png
