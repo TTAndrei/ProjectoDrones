@@ -40,3 +40,4 @@ C:\Users\arnau\Source\Repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formula
 C:\Users\arnau\Source\Repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\MQTTnet.dll
 C:\Users\arnau\Source\Repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Newtonsoft.Json.dll
 C:\Users\arnau\Source\Repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Newtonsoft.Json.xml
+C:\Users\arnau\Source\Repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Assets\drone-logoC.png

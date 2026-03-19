@@ -71,6 +71,7 @@
             this.landBtn = new System.Windows.Forms.Button();
             this.despegarBtn = new System.Windows.Forms.Button();
             this.RTLBtn = new System.Windows.Forms.Button();
+            this.webBrowser1 = new System.Windows.Forms.WebBrowser();
             ((System.ComponentModel.ISupportInitialize)(this.headingTrackBar)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.velocidadTrackBar)).BeginInit();
             this.groupBox4.SuspendLayout();
@@ -587,11 +588,22 @@
             this.RTLBtn.UseVisualStyleBackColor = false;
             this.RTLBtn.Click += new System.EventHandler(this.RTLBtn_Click);
             // 
+            // webBrowser1
+            // 
+            this.webBrowser1.Dock = System.Windows.Forms.DockStyle.Right;
+            this.webBrowser1.IsWebBrowserContextMenuEnabled = false;
+            this.webBrowser1.Location = new System.Drawing.Point(814, 0);
+            this.webBrowser1.MinimumSize = new System.Drawing.Size(20, 20);
+            this.webBrowser1.Name = "webBrowser1";
+            this.webBrowser1.Size = new System.Drawing.Size(905, 807);
+            this.webBrowser1.TabIndex = 51;
+            // 
             // Form2
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(9F, 20F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(800, 807);
+            this.ClientSize = new System.Drawing.Size(1719, 807);
+            this.Controls.Add(this.webBrowser1);
             this.Controls.Add(this.ir_al_punto);
             this.Controls.Add(this.label4);
             this.Controls.Add(this.headingTrackBar);
@@ -663,5 +675,6 @@
         private System.Windows.Forms.Button landBtn;
         private System.Windows.Forms.Button despegarBtn;
         private System.Windows.Forms.Button RTLBtn;
+        private System.Windows.Forms.WebBrowser webBrowser1;
     }
 }

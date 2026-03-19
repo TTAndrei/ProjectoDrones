@@ -2,26 +2,30 @@
 using MQTTnet.Client;
 using MQTTnet.Client.Options;
 using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
+using System.Globalization;
 using System.Drawing;
-using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using static MAVLink;
 using Newtonsoft.Json;
 
 namespace Formulario
 {
     public partial class Form2 : Form
     {
-        
         private IMqttClient client;
+        private bool _mapLoaded;
+        private string _droneIconUrl;
+
         public Form2()
         {
-            InitializeComponent();         
+            InitializeComponent();
+
+            // -----------------------
+            // Inicializar el mapa ya aquí
+            // -----------------------
+            InitializeMap();
+
             var factory = new MqttFactory();
             client = factory.CreateMqttClient();
             this.Load += Form2_Load; // asociar el Load 
@@ -94,6 +98,7 @@ namespace Formulario
         private async void Form2_Load(object sender, EventArgs e)
         {
             await ConectarMQTT();
+            InitializeMap();
         }
         private async Task ConectarMQTT()
         {
@@ -118,7 +123,7 @@ namespace Formulario
             {
                 try
                 {
-                    await client.SubscribeAsync("interfazGlobal/autopilotServiceDemo/#");
+                    await client.SubscribeAsync("autopilotServiceDemo/interfazGlobal/#");
                 }
                 catch (Exception ex)
                 {
@@ -164,23 +169,23 @@ namespace Formulario
                 }
                 this.Invoke(new Action(() =>
                 {
-                    if (topic == "interfazGlobal/autopilotServiceDemo/telemetryInfo")
+                    if (topic == "autopilotServiceDemo/interfazGlobal/telemetryInfo")
                     {
                         ProcesarTelemetria(payload);
                     }
-                    else if (topic == "interfazGlobal/autopilotServiceDemo/connected")
+                    else if (topic == "autopilotServiceDemo/interfazGlobal/connected")
                     {
                         but_connect.Text = "Conectado";
                         but_connect.ForeColor = Color.White;
                         but_connect.BackColor = Color.Green;
                     }
-                    else if (topic == "interfazGlobal/autopilotServiceDemo/flying")
+                    else if (topic == "autopilotServiceDemo/interfazGlobal/flying")
                     {
                         despegarBtn.Text = "En el aire";
                         despegarBtn.ForeColor = Color.White;
                         despegarBtn.BackColor = Color.Green;
                     }
-                    else if (topic == "interfazGlobal/autopilotServiceDemo/landed")
+                    else if (topic == "autopilotServiceDemo/interfazGlobal/landed")
                     {
                         landBtn.Text = "En tierra";
                         landBtn.ForeColor = Color.White;
@@ -188,7 +193,7 @@ namespace Formulario
 
                         _ = Restart();
                     }
-                    else if (topic == "interfazGlobal/autopilotServiceDemo/atHome")
+                    else if (topic == "autopilotServiceDemo/interfazGlobal/atHome")
                     {
                         RTLBtn.Text = "En tierra";
                         RTLBtn.ForeColor = Color.White;
@@ -304,7 +309,13 @@ namespace Formulario
             try
             {
                 // Parsear el JSON recibido en un objeto dinámico
-                dynamic telemetryInfo = Newtonsoft.Json.JsonConvert.DeserializeObject(payload);
+                dynamic telemetryInfo = JsonConvert.DeserializeObject(payload);
+
+                double lat = telemetryInfo.lat;
+                double lon = telemetryInfo.lon;
+
+                // Actualizar posición en el mapa
+                UpdateMapPosition(lat, lon);
 
                 // Asignar valores a los labels
                 altitudLbl.Text = ((double)telemetryInfo.alt).ToString("0.00");
@@ -386,5 +397,94 @@ namespace Formulario
             .Build());
             client.PublishAsync(message);
         }
+
+        // Reemplaza InitializeMap()
+        private void InitializeMap()
+        {
+            _mapLoaded = false;
+            webBrowser1.ScriptErrorsSuppressed = true;
+            webBrowser1.IsWebBrowserContextMenuEnabled = false;
+            webBrowser1.DocumentCompleted += WebBrowser1_DocumentCompleted;
+            webBrowser1.DocumentText = GetMapHtml();
+        }
+
+        private void WebBrowser1_DocumentCompleted(object sender, WebBrowserDocumentCompletedEventArgs e)
+        {
+            _mapLoaded = true;
+        }
+
+        private string GetMapHtml()
+        {
+            // 1. Leer imagen y convertir a Base64
+            byte[] imageBytes = System.IO.File.ReadAllBytes("Assets/drone-logoC.png");
+            string base64 = Convert.ToBase64String(imageBytes);
+
+            // 2. Insertarlo en el HTML
+            return $@"<!DOCTYPE html>
+<html>
+<head>
+<meta charset='utf-8' />
+<meta http-equiv='X-UA-Compatible' content='IE=11' />
+<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.3/dist/leaflet.css' />
+<style>html,body,#map{{height:100%;margin:0;padding:0}}</style>
+</head>
+<body>
+<div id='map'></div>
+<script src='https://unpkg.com/leaflet@1.9.3/dist/leaflet.js'></script>
+<script>
+  var map = L.map('map').setView([0,0], 2);
+
+  L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+    attribution: '&copy; OpenStreetMap contributors'
+  }}).addTo(map);
+
+  var customIcon = L.icon({{
+    iconUrl: 'data:image/png;base64,{base64}',
+    iconSize: [32, 32],
+    iconAnchor: [16, 32]
+  }});
+
+  var marker = L.marker([0,0], {{ icon: customIcon }}).addTo(map);
+
+  function updatePosition(lat, lon) {{
+    var la = parseFloat(lat);
+    var lo = parseFloat(lon);
+    if (isNaN(la) || isNaN(lo)) return;
+    marker.setLatLng([la, lo]);
+    map.setView([la, lo], Math.max(12, map.getZoom()));
+  }}
+</script>
+</body>
+</html>";
+        }
+
+        private void UpdateMapPosition(double lat, double lon)
+{
+    if (!this.IsHandleCreated) return;
+
+    if (!_mapLoaded)
+    {
+        this.BeginInvoke((Action)(async () =>
+        {
+            int tries = 0;
+            while (!_mapLoaded && tries++ < 10)
+            {
+                await Task.Delay(200);
+            }
+            try
+            {
+                webBrowser1.Document.InvokeScript("updatePosition", new object[] { lat.ToString(System.Globalization.CultureInfo.InvariantCulture), lon.ToString(System.Globalization.CultureInfo.InvariantCulture) });
+            }
+            catch { }
+        }));
+        return;
+    }
+
+    try
+    {
+        webBrowser1.Document.InvokeScript("updatePosition", new object[] { lat.ToString(System.Globalization.CultureInfo.InvariantCulture), lon.ToString(System.Globalization.CultureInfo.InvariantCulture) });
+    }
+    catch { }
+}
     }
 }
