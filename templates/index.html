@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Proyecto Drones - WebApp</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+                integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+                crossorigin="">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+                    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+                    crossorigin=""></script>
+    <style>
+        :root {
+            --bg: #0b1220;
+            --panel: #111b2e;
+            --panel-2: #17253f;
+            --text: #f5f8ff;
+            --muted: #a2b1cc;
+            --accent: #1fa2ff;
+            --good: #36b37e;
+            --warn: #ffb020;
+            --bad: #ff5630;
+            --border: #243456;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            font-family: "Segoe UI", Tahoma, sans-serif;
+            color: var(--text);
+            background:
+                radial-gradient(1200px 600px at 90% -10%, #20406e 0%, transparent 60%),
+                radial-gradient(1000px 600px at -20% 110%, #1a3256 0%, transparent 60%),
+                var(--bg);
+            min-height: 100vh;
+        }
+
+        .shell {
+            max-width: 1150px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            margin-bottom: 14px;
+            background: linear-gradient(145deg, rgba(31, 162, 255, 0.15), rgba(23, 37, 63, 0.8));
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 16px;
+        }
+
+        .title {
+            margin: 0;
+            font-size: 1.4rem;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+        }
+
+        .status-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .pill {
+            font-size: 0.88rem;
+            padding: 6px 10px;
+            border-radius: 100px;
+            border: 1px solid var(--border);
+            background: rgba(17, 27, 46, 0.85);
+            color: var(--muted);
+        }
+
+        .tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+
+        .tab-btn {
+            border: 1px solid var(--border);
+            background: var(--panel);
+            color: var(--text);
+            padding: 10px 14px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .tab-btn.active {
+            background: linear-gradient(180deg, #2a74d8, #2258a8);
+            border-color: #3e88ef;
+        }
+
+        .tab-panel {
+            display: none;
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            background: linear-gradient(160deg, rgba(23, 37, 63, 0.9), rgba(17, 27, 46, 0.95));
+            padding: 16px;
+        }
+
+        .tab-panel.active { display: block; }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1.1fr 1fr;
+            gap: 16px;
+        }
+
+        .card {
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 12px;
+            background: rgba(11, 18, 32, 0.45);
+        }
+
+        .card h3 {
+            margin: 0 0 10px 0;
+            font-size: 1rem;
+            color: #d8e5ff;
+        }
+
+        .control-row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+
+        button, input {
+            font: inherit;
+        }
+
+        .btn {
+            border: 0;
+            border-radius: 10px;
+            padding: 10px 12px;
+            cursor: pointer;
+            color: #fff;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+        }
+
+        .btn.connect { background: #255eb2; }
+        .btn.takeoff { background: #c18400; }
+        .btn.land { background: #b03f2b; }
+        .btn.rtl { background: #5b4bcf; }
+        .btn.voice { background: #0f8b8d; }
+
+        .btn.small {
+            width: 100%;
+            padding: 12px 8px;
+            background: var(--panel-2);
+            border: 1px solid #355180;
+            color: #ebf3ff;
+        }
+
+        .input {
+            width: 100%;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: #0f1728;
+            color: var(--text);
+            padding: 9px 10px;
+        }
+
+        .direction {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+        }
+
+        .two-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .telemetry {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+        }
+
+        .metric {
+            border: 1px solid var(--border);
+            background: #0e1830;
+            border-radius: 10px;
+            padding: 10px;
+        }
+
+        .metric .k {
+            color: var(--muted);
+            font-size: 0.82rem;
+            margin-bottom: 4px;
+        }
+
+        .metric .v {
+            font-size: 1.05rem;
+            font-weight: 700;
+        }
+
+        #map {
+            width: 100%;
+            height: 42vh;
+            min-height: 260px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            overflow: hidden;
+        }
+
+        #remoteVideo {
+            width: 100%;
+            max-height: 70vh;
+            background: #000;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+
+        .hint {
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
+
+        .log {
+            margin-top: 10px;
+            background: #0c1528;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px;
+            color: #b6c8e9;
+            min-height: 40px;
+            font-size: 0.92rem;
+        }
+
+        @media (max-width: 920px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+
+            .telemetry {
+                grid-template-columns: 1fr;
+            }
+
+            #map { height: 32vh; }
+        }
+    </style>
+</head>
+<body>
+    <div class="shell">
+        <div class="header">
+            <h1 class="title">Centro de control del dron</h1>
+            <div class="status-row">
+                <span id="mqttStatus" class="pill">Gateway HTTP: conectando</span>
+                <span id="camStatus" class="pill">WebRTC: sin conectar</span>
+                <span id="stateStatus" class="pill">Estado dron: -</span>
+            </div>
+        </div>
+
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="controlTab">Control</button>
+            <button class="tab-btn" data-tab="videoTab">Video</button>
+        </div>
+
+        <section id="controlTab" class="tab-panel active">
+            <div class="grid">
+                <div class="card">
+                    <h3>Comandos de vuelo</h3>
+
+                    <div class="control-row">
+                        <button id="connectBtn" class="btn connect">Conectar + Telemetria</button>
+                        <button id="takeoffBtn" class="btn takeoff">Despegar</button>
+                        <button id="landBtn" class="btn land">Aterrizar</button>
+                        <button id="rtlBtn" class="btn rtl">RTL</button>
+                    </div>
+
+                    <div class="two-col" style="margin-bottom:10px;">
+                        <div>
+                            <label for="flightAltInput" class="hint">Altura de vuelo (m)</label>
+                            <input id="flightAltInput" class="input" type="number" min="1" max="120" step="0.5" value="8">
+                        </div>
+                        <div style="display:flex;align-items:flex-end;">
+                            <button id="setFlightAltBtn" class="btn small">Aplicar altura de vuelo</button>
+                        </div>
+                    </div>
+
+                    <div class="two-col" style="margin-bottom:10px;">
+                        <div>
+                            <label for="speedInput" class="hint">Velocidad navegacion (m/s)</label>
+                            <input id="speedInput" class="input" type="number" min="0.2" max="12" step="0.1" value="2">
+                        </div>
+                        <div style="display:flex;align-items:flex-end;">
+                            <button id="setSpeedBtn" class="btn small">Aplicar velocidad</button>
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom:10px;">
+                        <label for="alturaInput" class="hint">Altura despegue (secundario)</label>
+                        <input id="alturaInput" class="input" type="number" min="1" max="50" value="5">
+                    </div>
+
+                    <div class="two-col" style="margin-bottom:10px;">
+                        <div>
+                            <label for="headingInput" class="hint">Heading (grados)</label>
+                            <input id="headingInput" class="input" type="number" min="0" max="360" step="1" value="0">
+                        </div>
+                        <div style="display:flex;align-items:flex-end;">
+                            <button id="setHeadingBtn" class="btn small">Aplicar heading</button>
+                        </div>
+                    </div>
+
+                    <div class="direction">
+                        <button class="btn small" data-dir="NorthWest">NW</button>
+                        <button class="btn small" data-dir="North">N</button>
+                        <button class="btn small" data-dir="NorthEast">NE</button>
+                        <button class="btn small" data-dir="West">W</button>
+                        <button class="btn small" data-dir="Stop">STOP</button>
+                        <button class="btn small" data-dir="East">E</button>
+                        <button class="btn small" data-dir="SouthWest">SW</button>
+                        <button class="btn small" data-dir="South">S</button>
+                        <button class="btn small" data-dir="SouthEast">SE</button>
+                    </div>
+
+                    <div class="control-row" style="margin-top:10px;">
+                        <button id="voiceBtn" class="btn voice">Activar voz</button>
+                    </div>
+
+                    <div class="hint">
+                        Comandos de voz: "Despega", "Aterriza", "Vuela hacia el norte", "RTL", "Conecta", "Para".
+                    </div>
+                    <div id="voiceLog" class="log">Voz inactiva.</div>
+
+                    <h3 style="margin-top:12px;">Diagnostico del sistema</h3>
+                    <div class="telemetry">
+                        <div class="metric"><div class="k">Gateway MQTT</div><div id="diagGateway" class="v">-</div></div>
+                        <div class="metric"><div class="k">Autopilot Service</div><div id="diagService" class="v">-</div></div>
+                        <div class="metric"><div class="k">Ultimo evento</div><div id="diagEvent" class="v">-</div></div>
+                        <div class="metric"><div class="k">Ultima actualizacion</div><div id="diagTs" class="v">-</div></div>
+                    </div>
+                    <div id="diagError" class="log">Sin errores reportados.</div>
+                </div>
+
+                <div class="card">
+                    <h3>Telemetria en vivo</h3>
+                    <div class="telemetry">
+                        <div class="metric"><div class="k">Altitud</div><div id="altV" class="v">-</div></div>
+                        <div class="metric"><div class="k">Ground speed</div><div id="spdV" class="v">-</div></div>
+                        <div class="metric"><div class="k">Heading</div><div id="headV" class="v">-</div></div>
+                        <div class="metric"><div class="k">Bateria</div><div id="batV" class="v">-</div></div>
+                        <div class="metric"><div class="k">Flight mode</div><div id="modeV" class="v">-</div></div>
+                        <div class="metric"><div class="k">GPS</div><div id="gpsV" class="v">-</div></div>
+                    </div>
+
+                    <h3 style="margin-top:12px;">Mapa de posicion</h3>
+                    <div id="map"></div>
+                    <p id="mapHint" class="hint" style="margin-top:10px;">Esperando coordenadas GPS del dron...</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="videoTab" class="tab-panel">
+            <div class="card">
+                <h3>Stream de camara (WebRTC)</h3>
+                <div class="control-row">
+                    <button id="videoConnectBtn" class="btn connect">Conectar video</button>
+                    <button id="videoStopBtn" class="btn land" style="display:none;">Detener video</button>
+                </div>
+                <video id="remoteVideo" autoplay playsinline muted></video>
+                <div id="videoLog" class="log">Esperando conexion de video.</div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        // ── El navegador habla con el gateway Flask por HTTP.
+        // ── La señalización WebRTC también va por HTTP (el gateway hace de relay MQTT).
+        // ── No conectamos a HiveMQ directamente desde el navegador.
+
+        const voiceLog    = document.getElementById("voiceLog");
+        const videoLog    = document.getElementById("videoLog");
+        const camStatus   = document.getElementById("camStatus");
+        const stateStatus = document.getElementById("stateStatus");
+        const mapHint     = document.getElementById("mapHint");
+        const diagGateway = document.getElementById("diagGateway");
+        const diagService = document.getElementById("diagService");
+        const diagEvent   = document.getElementById("diagEvent");
+        const diagTs      = document.getElementById("diagTs");
+        const diagError   = document.getElementById("diagError");
+
+        const recognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+        let recognition  = null;
+        let voiceActive  = false;
+        let webrtcPc     = null;
+        let videoRunning = false;
+
+        let map, marker, pathLine;
+        const pathCoords = [];
+
+        // ══════════════════════════════════════════════════
+        //  HTTP helpers
+        // ══════════════════════════════════════════════════
+        async function postApi(path, body = {}) {
+            const r = await fetch(path, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body)
+            });
+            if (!r.ok) {
+                let detail = `HTTP ${r.status} en ${path}`;
+                try { const d = await r.json(); if (d.error) detail = d.error; } catch (_) {}
+                throw new Error(detail);
+            }
+        }
+
+        async function getTelemetry() {
+            const r = await fetch("/telemetry");
+            if (!r.ok) throw new Error(`HTTP ${r.status} en /telemetry`);
+            return r.json();
+        }
+
+        // ══════════════════════════════════════════════════
+        //  WebRTC — señalización a través del gateway HTTP
+        // ══════════════════════════════════════════════════
+        function setLog(el, text) { el.textContent = text; }
+
+        async function startWebRTC() {
+            if (videoRunning) return;
+            videoRunning = true;
+            document.getElementById("videoConnectBtn").style.display = "none";
+            document.getElementById("videoStopBtn").style.display    = "";
+            camStatus.textContent = "WebRTC: solicitando stream";
+            setLog(videoLog, "Enviando solicitud al CameraService…");
+
+            try {
+                // 1. Pedir stream al gateway
+                const reqRes = await fetch("/webrtc/request", { method: "POST" });
+                if (!reqRes.ok) throw new Error("No se pudo enviar solicitud WebRTC");
+                setLog(videoLog, "Solicitud enviada. Esperando oferta SDP (hasta 15 s)…");
+                camStatus.textContent = "WebRTC: esperando oferta";
+
+                // 2. Crear RTCPeerConnection
+                webrtcPc = new RTCPeerConnection({
+                    iceServers: [
+                        { urls: "stun:stun.l.google.com:19302" },
+                        { urls: "stun:stun1.l.google.com:19302" }
+                    ]
+                });
+
+                webrtcPc.ontrack = (ev) => {
+                    const videoEl = document.getElementById("remoteVideo");
+                    videoEl.srcObject = ev.streams[0] || new MediaStream([ev.track]);
+                    setLog(videoLog, "Video WebRTC recibido correctamente.");
+                };
+
+                webrtcPc.onconnectionstatechange = () => {
+                    const s = webrtcPc.connectionState;
+                    camStatus.textContent = `WebRTC: ${s}`;
+                    if (s === "failed" || s === "disconnected") {
+                        setLog(videoLog, `Conexión WebRTC: ${s}. Pulsa "Conectar video" para reintentar.`);
+                        stopWebRTC();
+                    }
+                };
+
+                webrtcPc.oniceconnectionstatechange = () => {
+                    setLog(videoLog, `ICE: ${webrtcPc.iceConnectionState}`);
+                };
+
+                // 3. Polling para recibir la oferta SDP (el gateway hace long-poll de 15 s)
+                let offerData = null;
+                for (let attempt = 0; attempt < 4; attempt++) {
+                    const res = await fetch("/webrtc/offer");
+                    if (res.status === 200) {
+                        const body = await res.json();
+                        if (body.status === "ok") { offerData = body.offer; break; }
+                    }
+                    if (attempt < 3) setLog(videoLog, `Sin oferta aún (intento ${attempt + 1}/4)…`);
+                }
+
+                if (!offerData) throw new Error("No llegó la oferta SDP. ¿El CameraService está activo?");
+
+                setLog(videoLog, "Oferta recibida. Procesando…");
+                camStatus.textContent = "WebRTC: negociando";
+
+                // 4. Aplicar oferta y crear answer
+                await webrtcPc.setRemoteDescription(new RTCSessionDescription(offerData));
+                const answer = await webrtcPc.createAnswer();
+                await webrtcPc.setLocalDescription(answer);
+
+                // 5. Esperar ICE gathering
+                setLog(videoLog, "Esperando ICE gathering…");
+                await new Promise((resolve) => {
+                    if (webrtcPc.iceGatheringState === "complete") { resolve(); return; }
+                    const timeout = setTimeout(resolve, 8000);
+                    webrtcPc.onicegatheringstatechange = () => {
+                        if (webrtcPc.iceGatheringState === "complete") {
+                            clearTimeout(timeout); resolve();
+                        }
+                    };
+                });
+
+                // 6. Enviar answer al gateway → éste la reenvía al CameraService por MQTT
+                const answerRes = await fetch("/webrtc/answer", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        sdp:  webrtcPc.localDescription.sdp,
+                        type: webrtcPc.localDescription.type
+                    })
+                });
+                if (!answerRes.ok) throw new Error("No se pudo enviar la answer");
+
+                setLog(videoLog, "Answer enviada. Esperando stream de video…");
+            } catch (err) {
+                setLog(videoLog, `Error WebRTC: ${err.message}`);
+                camStatus.textContent = "WebRTC: error";
+                stopWebRTC();
+            }
+        }
+
+        function stopWebRTC() {
+            if (webrtcPc) { webrtcPc.close(); webrtcPc = null; }
+            const videoEl = document.getElementById("remoteVideo");
+            if (videoEl.srcObject) {
+                videoEl.srcObject.getTracks().forEach(t => t.stop());
+                videoEl.srcObject = null;
+            }
+            videoRunning = false;
+            camStatus.textContent = "WebRTC: sin conectar";
+            document.getElementById("videoConnectBtn").style.display = "";
+            document.getElementById("videoStopBtn").style.display    = "none";
+        }
+
+        // ══════════════════════════════════════════════════
+        //  Telemetría UI
+        // ══════════════════════════════════════════════════
+        function updateTelemetryUI(data) {
+            const alt     = Number(data.alt || 0);
+            const speed   = Number(data.groundSpeed || 0);
+            const heading = Number(data.heading || 0);
+            const lat     = Number(data.lat);
+            const lon     = Number(data.lon);
+
+            document.getElementById("altV").textContent  = `${alt.toFixed(1)} m`;
+            document.getElementById("spdV").textContent  = `${speed.toFixed(1)} m/s`;
+            document.getElementById("headV").textContent = `${heading.toFixed(1)} deg`;
+            document.getElementById("batV").textContent  = data.battery_remaining == null ? "-" : `${data.battery_remaining}%`;
+            document.getElementById("modeV").textContent = data.flightMode || "-";
+            stateStatus.textContent = `Estado dron: ${data.state || "-"}`;
+
+            if (Number.isFinite(lat) && Number.isFinite(lon) && lat !== 0 && lon !== 0) {
+                document.getElementById("gpsV").textContent = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+                updateMap(lat, lon);
+                mapHint.textContent = "Mapa actualizado con posicion GPS en tiempo real.";
+            } else {
+                document.getElementById("gpsV").textContent = "sin GPS";
+                mapHint.textContent = "Sin GPS valido aun. Verifica startTelemetry y conexion SITL.";
+            }
+
+            // Estado MQTT del gateway (leído del gateway, no conexión directa)
+            const mqttPill = document.getElementById("mqttStatus");
+            if (data.gateway_mqtt_connected) {
+                mqttPill.textContent = "Gateway MQTT: conectado";
+                mqttPill.style.color = "var(--good)";
+            } else {
+                mqttPill.textContent = "Gateway MQTT: desconectado";
+                mqttPill.style.color = "var(--bad)";
+            }
+
+            diagGateway.textContent = data.gateway_mqtt_connected ? "Conectado" : "Desconectado";
+            diagService.textContent = data.service_connected ? "Conectado" : "No conectado";
+            diagEvent.textContent   = data.last_event || "-";
+
+            if (data.last_update_ts) {
+                diagTs.textContent = new Date(data.last_update_ts * 1000).toLocaleTimeString();
+            } else {
+                diagTs.textContent = "-";
+            }
+
+            if (data.last_error) {
+                diagError.textContent = `Error: ${data.last_error}`;
+            } else if (data.last_status) {
+                diagError.textContent = `Estado: ${data.last_status}`;
+            } else {
+                diagError.textContent = "Sin errores reportados.";
+            }
+        }
+
+        // ══════════════════════════════════════════════════
+        //  Mapa Leaflet
+        // ══════════════════════════════════════════════════
+        function initMap() {
+            map = L.map("map").setView([41.3851, 2.1734], 13);
+            L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+                maxZoom: 19,
+                attribution: "&copy; OpenStreetMap contributors"
+            }).addTo(map);
+
+            marker = L.marker([41.3851, 2.1734]).addTo(map).bindPopup("Esperando posicion del dron");
+
+            // Clic en el mapa → goto GPS
+            map.on("click", async (e) => {
+                const { lat, lng } = e.latlng;
+                const alt = Number(document.getElementById("flightAltInput").value || 8);
+                try {
+                    await postApi("/goto", { lat, lon: lng, alt });
+                } catch (err) {
+                    diagError.textContent = `Error goto: ${err.message}`;
+                }
+            });
+
+            setTimeout(() => map.invalidateSize(), 200);
+        }
+
+        function updateMap(lat, lon) {
+            const ll = [lat, lon];
+            pathCoords.push(ll);
+            marker.setLatLng(ll).bindPopup("Dron");
+            map.setView(ll, 17);
+            if (pathLine) {
+                pathLine.setLatLngs(pathCoords);
+            } else if (pathCoords.length > 1) {
+                pathLine = L.polyline(pathCoords, { color: "#ffb020", weight: 3 }).addTo(map);
+            }
+        }
+
+        // ══════════════════════════════════════════════════
+        //  Tabs
+        // ══════════════════════════════════════════════════
+        function activateTabs() {
+            document.querySelectorAll(".tab-btn").forEach((btn) => {
+                btn.addEventListener("click", () => {
+                    const tabId = btn.dataset.tab;
+                    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+                    document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+                    btn.classList.add("active");
+                    document.getElementById(tabId).classList.add("active");
+                    if (tabId === "controlTab") setTimeout(() => map && map.invalidateSize(), 150);
+                });
+            });
+        }
+
+        // ══════════════════════════════════════════════════
+        //  Voz
+        // ══════════════════════════════════════════════════
+        function setupVoiceControl() {
+            if (!recognitionAPI) {
+                setLog(voiceLog, "Tu navegador no soporta reconocimiento de voz.");
+                document.getElementById("voiceBtn").disabled = true;
+                return;
+            }
+
+            recognition = new recognitionAPI();
+            recognition.lang = "es-ES";
+            recognition.continuous = true;
+            recognition.interimResults = false;
+
+            recognition.onresult = (event) => {
+                const last = event.results[event.results.length - 1][0].transcript.trim().toLowerCase();
+                setLog(voiceLog, `Escuchado: "${last}"`);
+                executeVoiceCommand(last);
+            };
+
+            recognition.onerror = (event) => setLog(voiceLog, `Error voz: ${event.error}`);
+            recognition.onend   = () => { if (voiceActive) recognition.start(); };
+        }
+
+        function commandFromText(text) {
+            const t = text.toLowerCase();
+            if (t.includes("conecta"))                                        return { cmd: "connect" };
+            if (t.includes("despega") || t.includes("despegar"))              return { cmd: "arm_takeOff" };
+            if (t.includes("aterriza") || t.includes("aterrizar"))            return { cmd: "Land" };
+            if (t.includes("rtl") || t.includes("vuelve a casa") || t.includes("regresa a casa")) return { cmd: "RTL" };
+            if (t.includes("para") || t.includes("stop") || t.includes("deten")) return { cmd: "go", payload: "Stop" };
+
+            const dirs = [
+                ["noroeste","NorthWest"],["noreste","NorthEast"],
+                ["suroeste","SouthWest"],["sureste","SouthEast"],
+                ["norte","North"],["sur","South"],["este","East"],["oeste","West"]
+            ];
+            for (const [word, dir] of dirs) {
+                if (t.includes(word)) return { cmd: "go", payload: dir };
+            }
+
+            const hm = t.match(/(rumbo|heading)\s*(\d{1,3})/);
+            if (hm) return { cmd: "changeHeading", payload: Number(hm[2]) };
+
+            const sm = t.match(/(velocidad|rapidez)\s*(\d+(?:[\.,]\d+)?)/);
+            if (sm) return { cmd: "changeNavSpeed", payload: Number(sm[2].replace(",",".")) };
+
+            const am = t.match(/(altura|altitud)\s*(\d+(?:[\.,]\d+)?)/);
+            if (am) return { cmd: "changeAltitude", payload: Number(am[2].replace(",",".")) };
+
+            return null;
+        }
+
+        function executeVoiceCommand(text) {
+            const parsed = commandFromText(text);
+            if (!parsed) return;
+
+            const onErr = (e) => { setLog(voiceLog, e.message); diagError.textContent = `Error: ${e.message}`; };
+
+            if (parsed.cmd === "connect") {
+                postApi("/connect").then(() => postApi("/startTelemetry")).catch(onErr);
+            } else if (parsed.cmd === "arm_takeOff") {
+                postApi("/takeoff", { altura: Number(document.getElementById("alturaInput").value || 5) }).catch(onErr);
+            } else if (parsed.cmd === "Land") {
+                postApi("/land").catch(onErr);
+            } else if (parsed.cmd === "RTL") {
+                postApi("/rtl").catch(onErr);
+            } else if (parsed.cmd === "changeHeading") {
+                postApi("/changeHeading", { heading: parsed.payload || 0 }).catch(onErr);
+            } else if (parsed.cmd === "changeNavSpeed") {
+                postApi("/changeNavSpeed", { speed: parsed.payload || 2 }).catch(onErr);
+            } else if (parsed.cmd === "changeAltitude") {
+                postApi("/changeAltitude", { alt: parsed.payload || 5 }).catch(onErr);
+            } else if (parsed.cmd === "go") {
+                postApi("/move", { direction: parsed.payload || "Stop" }).catch(onErr);
+            }
+        }
+
+        // ══════════════════════════════════════════════════
+        //  Botones
+        // ══════════════════════════════════════════════════
+        function bindControls() {
+            const onErr = (e) => { diagError.textContent = `Error: ${e.message}`; };
+
+            document.getElementById("connectBtn").addEventListener("click", async () => {
+                try {
+                    await postApi("/connect");
+                    await postApi("/startTelemetry");
+                    stateStatus.textContent = "Estado dron: conectando";
+                } catch(e) { onErr(e); }
+            });
+
+            document.getElementById("takeoffBtn").addEventListener("click", async () => {
+                const alt = Number(document.getElementById("alturaInput").value || 5);
+                try { await postApi("/takeoff", { altura: alt }); } catch(e) { onErr(e); }
+            });
+
+            document.getElementById("landBtn").addEventListener("click", async () => {
+                try { await postApi("/land"); } catch(e) { onErr(e); }
+            });
+
+            document.getElementById("rtlBtn").addEventListener("click", async () => {
+                try { await postApi("/rtl"); } catch(e) { onErr(e); }
+            });
+
+            document.querySelectorAll("[data-dir]").forEach((btn) => {
+                btn.addEventListener("click", async () => {
+                    try { await postApi("/move", { direction: btn.dataset.dir }); } catch(e) { onErr(e); }
+                });
+            });
+
+            document.getElementById("setHeadingBtn").addEventListener("click", async () => {
+                const heading = Number(document.getElementById("headingInput").value || 0);
+                try { await postApi("/changeHeading", { heading }); } catch(e) { onErr(e); }
+            });
+
+            document.getElementById("setSpeedBtn").addEventListener("click", async () => {
+                const speed = Number(document.getElementById("speedInput").value || 2);
+                try {
+                    await postApi("/changeNavSpeed", { speed });
+                    setLog(voiceLog, `Velocidad de navegacion aplicada: ${speed.toFixed(1)} m/s`);
+                } catch(e) { onErr(e); }
+            });
+
+            document.getElementById("setFlightAltBtn").addEventListener("click", async () => {
+                const alt = Number(document.getElementById("flightAltInput").value || 8);
+                try {
+                    await postApi("/changeAltitude", { alt });
+                    setLog(voiceLog, `Altura de vuelo solicitada: ${alt.toFixed(1)} m`);
+                } catch(e) { onErr(e); }
+            });
+
+            document.getElementById("videoConnectBtn").addEventListener("click", () => startWebRTC());
+            document.getElementById("videoStopBtn").addEventListener("click",    () => stopWebRTC());
+
+            document.getElementById("voiceBtn").addEventListener("click", () => {
+                if (!recognition) return;
+                if (!voiceActive) {
+                    voiceActive = true;
+                    recognition.start();
+                    setLog(voiceLog, "Voz activa. Habla usando comandos del dron.");
+                    document.getElementById("voiceBtn").textContent = "Desactivar voz";
+                } else {
+                    voiceActive = false;
+                    recognition.stop();
+                    setLog(voiceLog, "Voz inactiva.");
+                    document.getElementById("voiceBtn").textContent = "Activar voz";
+                }
+            });
+        }
+
+        // ══════════════════════════════════════════════════
+        //  Init
+        // ══════════════════════════════════════════════════
+        activateTabs();
+        initMap();
+        setupVoiceControl();
+        bindControls();
+
+        setInterval(async () => {
+            try { updateTelemetryUI(await getTelemetry()); } catch (_) {}
+        }, 500);
+    </script>
+</body>
+</html>

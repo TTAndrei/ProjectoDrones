@@ -1,131 +1,215 @@
-########  INSTALAR  ##########
-# Flask
-##############################
+"""
+Gateway HTTP → MQTT + señalización WebRTC para cámara del dron.
+
+Instalación:
+    pip install flask paho-mqtt
+
+Uso:
+    python gateway.py
+    Abre http://localhost:5000 en el móvil/navegador.
+
+Arquitectura:
+    - El gateway se conecta a HiveMQ como cliente "mobileFlask".
+    - Reenvía comandos HTTP → MQTT al AutopilotService.
+    - Para la cámara actúa de intermediario de señalización:
+        1. Publica su origen en webrtc/request para pedir stream al CameraService.
+        2. Recibe la oferta SDP en webrtc/offer/mobileFlask_<id>.
+        3. La expone en GET /webrtc/offer para que el navegador la recoja.
+        4. El navegador devuelve su answer vía POST /webrtc/answer.
+        5. El gateway la reenvía a webrtc/answer/mobileFlask_<id>.
+        6. El vídeo fluye P2P entre CameraService y el navegador.
+"""
 
 import json
 import threading
 import time
+import uuid
+import ssl
 from flask import Flask, request, jsonify, send_from_directory
 import paho.mqtt.client as mqtt
-from threading import Lock
+from threading import Lock, Event
 
-# CONFIGURACIÓN
-MQTT_BROKER = "554f19f1f4944c978dd30b509d24afc0.s1.eu.hivemq.cloud"   # cambia si quieres otro broker
-MQTT_PORT = 8884
-MQTT_KEEPALIVE = 60
+# ══════════════════════════════════════════════════════════════════════════════
+#  CONFIGURACIÓN
+# ══════════════════════════════════════════════════════════════════════════════
 
-# Topics (ajusta si tus tópicos son distintos)
-TOPIC_PREFIX_PUB = "mobileFlask/autopilotServiceDemo"        # donde publicamos comandos
-TOPIC_TELEMETRY_SUB = "autopilotServiceDemo/mobileFlask/telemetryInfo"  # donde viene telemetría
-TOPIC_EVENTS_SUB = "autopilotServiceDemo/mobileFlask/#"
+MQTT_BROKER    = "554f19f1f4944c978dd30b509d24afc0.s1.eu.hivemq.cloud"
+MQTT_PORT      = 8884
+MQTT_KEEPALIVE = 30
 
-app = Flask(__name__, static_folder="static", static_url_path="/static")
+MQTT_USER = "mobileFlask"
+MQTT_PASS = "U8BM!Pv4D4R!isq"
 
-# Estado compartido de telemetría
-telemetry = {
-    "alt": 0.0,
-    "state": "disconnected",
-    "lat": None,
-    "lon": None,
-    "heading": 0.0,
-    "groundSpeed": 0.0,
-    "flightMode": "",
-    "battery_remaining": None,
+# Identificador único de esta instancia del gateway
+_INST = uuid.uuid4().hex[:6]
+MY_ORIGIN = f"mobileFlask_{_INST}"
+
+# Topics de comando (gateway → AutopilotService)
+# El AutopilotService escucha: +/autopilotServiceDemo/#
+TOPIC_CMD_PREFIX = f"{MY_ORIGIN}/autopilotServiceDemo"
+
+# Topics de telemetría / eventos (AutopilotService → gateway)
+TOPIC_TELEM_SUB  = f"autopilotServiceDemo/{MY_ORIGIN}/telemetryInfo"
+TOPIC_EVENTS_SUB = f"autopilotServiceDemo/{MY_ORIGIN}/#"
+
+# Topics WebRTC de señalización (igual que el dashboard Python)
+T_CAM_REQUEST = "webrtc/request"
+T_CAM_OFFER   = f"webrtc/offer/{MY_ORIGIN}"
+T_CAM_ANSWER  = f"webrtc/answer/{MY_ORIGIN}"
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ESTADO COMPARTIDO
+# ══════════════════════════════════════════════════════════════════════════════
+
+telemetry: dict = {
+    "alt":                   0.0,
+    "state":                 "disconnected",
+    "lat":                   None,
+    "lon":                   None,
+    "heading":               0.0,
+    "groundSpeed":           0.0,
+    "flightMode":            "",
+    "battery_remaining":     None,
     "gateway_mqtt_connected": False,
-    "service_connected": False,
-    "last_event": "",
-    "last_status": "",
-    "last_error": "",
-    "last_update_ts": 0,
+    "service_connected":     False,
+    "last_event":            "",
+    "last_status":           "",
+    "last_error":            "",
+    "last_update_ts":        0,
 }
 telemetry_lock = Lock()
 
-# --- MQTT client setup ---
-mqtt_client = mqtt.Client(client_id="http_gateway_" + str(int(time.time())), transport="websockets")
-# Si tu broker requiere username/password:
-# mqtt_client.username_pw_set("user", "pass")
+# Señalización WebRTC: la oferta SDP que llega del CameraService
+_pending_offer: dict | None = None   # {"sdp": "...", "type": "offer"}
+_offer_event   = Event()             # se dispara cuando llega la oferta
+_offer_lock    = Lock()
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  MQTT
+# ══════════════════════════════════════════════════════════════════════════════
+
+mqtt_client = mqtt.Client(
+    client_id=f"gateway_{_INST}",
+    transport="websockets"
+)
+mqtt_client.ws_set_options(path="/mqtt")
+mqtt_client.tls_set(
+    ca_certs=None, certfile=None, keyfile=None,
+    cert_reqs=ssl.CERT_REQUIRED,
+    tls_version=ssl.PROTOCOL_TLSv1_2,
+)
+mqtt_client.tls_insecure_set(False)
+mqtt_client.username_pw_set(MQTT_USER, MQTT_PASS)
+
 
 def on_connect(client, userdata, flags, rc):
-    print("MQTT conectado con rc =", rc)
+    print(f"[MQTT] Conectado rc={rc}  origen={MY_ORIGIN}")
     with telemetry_lock:
         telemetry["gateway_mqtt_connected"] = (rc == 0)
         telemetry["last_update_ts"] = int(time.time())
-
-    # Suscribirse a telemetría + eventos de estado/error
-    client.subscribe(TOPIC_TELEMETRY_SUB)
-    client.subscribe(TOPIC_EVENTS_SUB)
-    print("Subscribed to", TOPIC_TELEMETRY_SUB)
-    print("Subscribed to", TOPIC_EVENTS_SUB)
+    if rc == 0:
+        # Telemetría + eventos del AutopilotService
+        client.subscribe(TOPIC_TELEM_SUB)
+        client.subscribe(TOPIC_EVENTS_SUB)
+        # Oferta WebRTC del CameraService (retain=True → llega aunque tardemos)
+        client.subscribe(T_CAM_OFFER)
+        print(f"[MQTT] Suscrito a {TOPIC_EVENTS_SUB}")
+        print(f"[MQTT] Suscrito a {T_CAM_OFFER}")
 
 
 def on_disconnect(client, userdata, rc):
     with telemetry_lock:
         telemetry["gateway_mqtt_connected"] = False
         telemetry["last_update_ts"] = int(time.time())
-    print("MQTT desconectado, rc =", rc)
+    print(f"[MQTT] Desconectado rc={rc}")
+
 
 def on_message(client, userdata, msg):
+    global _pending_offer
     try:
         payload = msg.payload.decode("utf-8")
+        topic   = msg.topic
+
+        # ── Señalización WebRTC ────────────────────────────────────────────
+        if topic == T_CAM_OFFER:
+            if not payload:
+                return   # mensaje retain vacío (limpieza)
+            data = json.loads(payload)
+            with _offer_lock:
+                _pending_offer = data
+            _offer_event.set()
+            print(f"[WebRTC] Oferta recibida del CameraService ({len(payload)} bytes)")
+            return
+
+        # ── Telemetría y eventos del AutopilotService ─────────────────────
         with telemetry_lock:
             telemetry["last_update_ts"] = int(time.time())
 
-            if msg.topic.endswith("/telemetryInfo"):
+            if topic.endswith("/telemetryInfo"):
                 data = json.loads(payload)
                 telemetry.update(data)
 
-            elif msg.topic.endswith("/status"):
+            elif topic.endswith("/status"):
                 data = json.loads(payload)
                 telemetry["last_status"] = data.get("message", "")
-                telemetry["last_event"] = "status"
+                telemetry["last_event"]  = "status"
 
-            elif msg.topic.endswith("/error"):
+            elif topic.endswith("/error"):
                 data = json.loads(payload)
                 telemetry["last_error"] = data.get("message", "error desconocido")
                 telemetry["last_event"] = "error"
 
-            elif msg.topic.endswith("/connected"):
+            elif topic.endswith("/connected"):
                 telemetry["service_connected"] = True
-                telemetry["state"] = "connected"
+                telemetry["state"]      = "connected"
                 telemetry["last_event"] = "connected"
 
-            elif msg.topic.endswith("/connectError"):
+            elif topic.endswith("/connectError"):
                 telemetry["service_connected"] = False
                 telemetry["last_event"] = "connectError"
                 telemetry["last_error"] = "Error al conectar con el dron"
 
-            elif msg.topic.endswith("/flying"):
-                telemetry["state"] = "flying"
+            elif topic.endswith("/flying"):
+                telemetry["state"]      = "flying"
                 telemetry["last_event"] = "flying"
 
-            elif msg.topic.endswith("/landed"):
-                telemetry["state"] = "landed"
+            elif topic.endswith("/landed"):
+                telemetry["state"]      = "landed"
                 telemetry["last_event"] = "landed"
 
-            elif msg.topic.endswith("/atHome"):
-                telemetry["state"] = "atHome"
+            elif topic.endswith("/atHome"):
+                telemetry["state"]      = "atHome"
                 telemetry["last_event"] = "atHome"
 
-            # Normalizamos tipos para la UI web
-            if telemetry.get("alt") is not None:
-                telemetry["alt"] = float(telemetry["alt"])
-            if telemetry.get("heading") is not None:
-                telemetry["heading"] = float(telemetry["heading"])
-            if telemetry.get("groundSpeed") is not None:
-                telemetry["groundSpeed"] = float(telemetry["groundSpeed"])
-            if telemetry.get("lat") not in (None, ""):
-                telemetry["lat"] = float(telemetry["lat"])
-            if telemetry.get("lon") not in (None, ""):
-                telemetry["lon"] = float(telemetry["lon"])
+            # Normalizar tipos
+            for k, t in [("alt", float), ("heading", float), ("groundSpeed", float)]:
+                if telemetry.get(k) is not None:
+                    try:
+                        telemetry[k] = t(telemetry[k])
+                    except Exception:
+                        pass
+            for k in ("lat", "lon"):
+                if telemetry.get(k) not in (None, ""):
+                    try:
+                        telemetry[k] = float(telemetry[k])
+                    except Exception:
+                        pass
+
     except Exception as e:
-        print("Error procesando mensaje MQTT:", e, msg.topic, msg.payload)
+        print(f"[MQTT] Error procesando mensaje: {e}  topic={msg.topic}")
         with telemetry_lock:
-            telemetry["last_error"] = f"Error procesando MQTT: {e}"
-            telemetry["last_event"] = "gatewayParseError"
-            telemetry["last_update_ts"] = int(time.time())
+            telemetry["last_error"]      = f"Error procesando MQTT: {e}"
+            telemetry["last_event"]      = "gatewayParseError"
+            telemetry["last_update_ts"]  = int(time.time())
 
 
-def _publish_command(topic, payload=""):
+mqtt_client.on_connect    = on_connect
+mqtt_client.on_message    = on_message
+mqtt_client.on_disconnect = on_disconnect
+
+
+def _publish(topic: str, payload: str = "") -> tuple[bool, str]:
+    """Publica en MQTT. Devuelve (ok, error_msg)."""
     try:
         if not mqtt_client.is_connected():
             raise RuntimeError("Gateway MQTT desconectado")
@@ -134,165 +218,251 @@ def _publish_command(topic, payload=""):
             raise RuntimeError(f"publish rc={info.rc}")
         return True, ""
     except Exception as e:
+        msg = str(e)
         with telemetry_lock:
-            telemetry["last_error"] = f"No se pudo publicar comando: {e}"
-            telemetry["last_event"] = "gatewayPublishError"
+            telemetry["last_error"]     = f"No se pudo publicar: {msg}"
+            telemetry["last_event"]     = "gatewayPublishError"
             telemetry["last_update_ts"] = int(time.time())
-        return False, str(e)
+        return False, msg
 
-username = "mobileFlask"
-password = "U8BM!Pv4D4R!isq"
 
-mqtt_client.ws_set_options(path="/mqtt")
-
-# IMPORTANTE: Configurar TLS/SSL para puerto 8884
-mqtt_client.tls_set(
-    ca_certs=None,
-    certfile=None,
-    keyfile=None,
-    cert_reqs=mqtt.ssl.CERT_REQUIRED,
-    tls_version=mqtt.ssl.PROTOCOL_TLSv1_2,
-    ciphers=None
-)
-mqtt_client.tls_insecure_set(False)
-
-mqtt_client.username_pw_set(username, password)
-
-mqtt_client.on_connect = on_connect
-mqtt_client.on_message = on_message
-mqtt_client.on_disconnect = on_disconnect
-
-def mqtt_connect_and_loop():
+def _mqtt_loop():
+    """Hilo MQTT con reconexión automática."""
+    backoff = 1
     while True:
         try:
-            print("Intentando conectar a MQTT broker:", MQTT_BROKER, MQTT_PORT)
+            print(f"[MQTT] Conectando a {MQTT_BROKER}:{MQTT_PORT}…")
             mqtt_client.connect(MQTT_BROKER, MQTT_PORT, MQTT_KEEPALIVE)
-            mqtt_client.loop_forever()  # bloqueará aquí; si desconecta intentará reconectar internamente
+            mqtt_client.loop_forever()
         except Exception as e:
-            print("Error MQTT:", e)
-            time.sleep(5)
+            print(f"[MQTT] Error: {e} — reintentando en {backoff}s")
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 30)
 
-# Lanzar hilo MQTT en background antes de arrancar Flask
-mqtt_thread = threading.Thread(target=mqtt_connect_and_loop, daemon=True)
-mqtt_thread.start()
 
-# ------------------ Endpoints HTTP ------------------
+threading.Thread(target=_mqtt_loop, daemon=True).start()
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  FLASK APP
+# ══════════════════════════════════════════════════════════════════════════════
+
+app = Flask(__name__, static_folder="static", static_url_path="/static")
+
+
+def _err(msg: str, code: int = 503):
+    return jsonify({"error": msg}), code
+
+
+# ── Página principal ──────────────────────────────────────────────────────────
+
+@app.route("/")
+def index():
+    try:
+        return send_from_directory("templates", "index.html")
+    except Exception:
+        return (
+            "<h3>Gateway HTTP → MQTT</h3>"
+            "<p>Coloca tu cliente en <code>templates/index.html</code></p>"
+        )
+
+
+# ── Telemetría ────────────────────────────────────────────────────────────────
+
+@app.route("/telemetry")
+def http_telemetry():
+    with telemetry_lock:
+        return jsonify(dict(telemetry))
+
+
+# ── Comandos de vuelo ─────────────────────────────────────────────────────────
 
 @app.route("/connect", methods=["POST"])
 def http_connect():
-    # Publicar comando de conexión (payload vacío)
-    topic = f"{TOPIC_PREFIX_PUB}/connect"
-    ok, err = _publish_command(topic, "")
-    if not ok:
-        return jsonify({"error": f"No se pudo enviar connect: {err}"}), 503
-    return ("", 204)
+    """
+    Body JSON opcional: {"real": true}
+    Sin body o real=false → simulación (tcp:127.0.0.1:5763).
+    """
+    data = request.get_json(silent=True) or {}
+    payload = "REAL" if data.get("real") else ""
+    ok, err = _publish(f"{TOPIC_CMD_PREFIX}/connect", payload)
+    return ("", 204) if ok else _err(f"connect: {err}")
+
 
 @app.route("/startTelemetry", methods=["POST"])
 def http_start_telemetry():
-    topic = f"{TOPIC_PREFIX_PUB}/startTelemetry"
-    ok, err = _publish_command(topic, "")
-    if not ok:
-        return jsonify({"error": f"No se pudo enviar startTelemetry: {err}"}), 503
-    return ("", 204)
+    ok, err = _publish(f"{TOPIC_CMD_PREFIX}/startTelemetry")
+    return ("", 204) if ok else _err(f"startTelemetry: {err}")
+
+
+@app.route("/stopTelemetry", methods=["POST"])
+def http_stop_telemetry():
+    ok, err = _publish(f"{TOPIC_CMD_PREFIX}/stopTelemetry")
+    return ("", 204) if ok else _err(f"stopTelemetry: {err}")
+
 
 @app.route("/takeoff", methods=["POST"])
 def http_takeoff():
-    data = request.get_json() or {}
-    altura = data.get("altura") or data.get("alt") or data.get("height")
-    if altura is None:
-        return jsonify({"error": "faltó campo 'altura' en JSON"}), 400
-    topic = f"{TOPIC_PREFIX_PUB}/arm_takeOff"
-    # publicar la altura como string (igual que hacía el cliente mqtt directamente)
-    ok, err = _publish_command(topic, str(altura))
-    if not ok:
-        return jsonify({"error": f"No se pudo enviar arm_takeOff: {err}"}), 503
-    return ("", 204)
+    data   = request.get_json(silent=True) or {}
+    altura = data.get("altura") or data.get("alt") or data.get("height") or 5
+    ok, err = _publish(f"{TOPIC_CMD_PREFIX}/arm_takeOff", str(altura))
+    return ("", 204) if ok else _err(f"takeoff: {err}")
+
 
 @app.route("/land", methods=["POST"])
 def http_land():
-    topic = f"{TOPIC_PREFIX_PUB}/Land"
-    ok, err = _publish_command(topic, "")
-    if not ok:
-        return jsonify({"error": f"No se pudo enviar Land: {err}"}), 503
-    return ("", 204)
+    ok, err = _publish(f"{TOPIC_CMD_PREFIX}/Land")
+    return ("", 204) if ok else _err(f"land: {err}")
+
 
 @app.route("/rtl", methods=["POST"])
 def http_rtl():
-    topic = f"{TOPIC_PREFIX_PUB}/RTL"
-    ok, err = _publish_command(topic, "")
-    if not ok:
-        return jsonify({"error": f"No se pudo enviar RTL: {err}"}), 503
-    return ("", 204)
+    ok, err = _publish(f"{TOPIC_CMD_PREFIX}/RTL")
+    return ("", 204) if ok else _err(f"rtl: {err}")
+
 
 @app.route("/move", methods=["POST"])
 def http_move():
-    data = request.get_json() or {}
+    data      = request.get_json(silent=True) or {}
     direction = data.get("direction") or data.get("dir")
     if not direction:
-        return jsonify({"error": "faltó campo 'direction' en JSON"}), 400
-    topic = f"{TOPIC_PREFIX_PUB}/go"
-    ok, err = _publish_command(topic, str(direction))
-    if not ok:
-        return jsonify({"error": f"No se pudo enviar go: {err}"}), 503
-    return ("", 204)
+        return _err("faltó campo 'direction'", 400)
+    ok, err = _publish(f"{TOPIC_CMD_PREFIX}/go", str(direction))
+    return ("", 204) if ok else _err(f"move: {err}")
+
 
 @app.route("/changeHeading", methods=["POST"])
 def http_change_heading():
-    data = request.get_json() or {}
+    data    = request.get_json(silent=True) or {}
     heading = data.get("heading")
     if heading is None:
-        return jsonify({"error": "faltó campo 'heading' en JSON"}), 400
-    topic = f"{TOPIC_PREFIX_PUB}/changeHeading"
-    ok, err = _publish_command(topic, str(heading))
-    if not ok:
-        return jsonify({"error": f"No se pudo enviar changeHeading: {err}"}), 503
-    return ("", 204)
+        return _err("faltó campo 'heading'", 400)
+    ok, err = _publish(f"{TOPIC_CMD_PREFIX}/changeHeading", str(heading))
+    return ("", 204) if ok else _err(f"changeHeading: {err}")
+
 
 @app.route("/changeNavSpeed", methods=["POST"])
 def http_change_nav_speed():
-    data = request.get_json() or {}
+    data  = request.get_json(silent=True) or {}
     speed = data.get("speed")
     if speed is None:
-        return jsonify({"error": "faltó campo 'speed' en JSON"}), 400
-    topic = f"{TOPIC_PREFIX_PUB}/changeNavSpeed"
-    ok, err = _publish_command(topic, str(speed))
-    if not ok:
-        return jsonify({"error": f"No se pudo enviar changeNavSpeed: {err}"}), 503
-    return ("", 204)
+        return _err("faltó campo 'speed'", 400)
+    ok, err = _publish(f"{TOPIC_CMD_PREFIX}/changeNavSpeed", str(speed))
+    return ("", 204) if ok else _err(f"changeNavSpeed: {err}")
 
 
 @app.route("/changeAltitude", methods=["POST"])
 def http_change_altitude():
-    data = request.get_json() or {}
-    alt = data.get("alt")
+    data = request.get_json(silent=True) or {}
+    alt  = data.get("alt") or data.get("altura")
     if alt is None:
-        alt = data.get("altura")
-    if alt is None:
-        return jsonify({"error": "falto campo 'alt' (o 'altura') en JSON"}), 400
-    topic = f"{TOPIC_PREFIX_PUB}/changeAltitude"
-    ok, err = _publish_command(topic, str(alt))
+        return _err("faltó campo 'alt'", 400)
+    ok, err = _publish(f"{TOPIC_CMD_PREFIX}/changeAltitude", str(alt))
+    return ("", 204) if ok else _err(f"changeAltitude: {err}")
+
+
+@app.route("/goto", methods=["POST"])
+def http_goto():
+    """
+    Body JSON: {"lat": 41.38, "lon": 2.17, "alt": 10}
+    Envía el dron a coordenadas GPS.
+    """
+    data = request.get_json(silent=True) or {}
+    lat  = data.get("lat")
+    lon  = data.get("lon")
+    if lat is None or lon is None:
+        return _err("faltan campos 'lat' y/o 'lon'", 400)
+    alt     = data.get("alt", 5.0)
+    payload = json.dumps({"lat": float(lat), "lon": float(lon), "alt": float(alt)})
+    ok, err = _publish(f"{TOPIC_CMD_PREFIX}/goto", payload)
+    return ("", 204) if ok else _err(f"goto: {err}")
+
+
+# ── WebRTC — señalización de cámara ──────────────────────────────────────────
+
+@app.route("/webrtc/request", methods=["POST"])
+def webrtc_request():
+    """
+    El navegador llama aquí para pedir el stream de cámara.
+    El gateway publica MY_ORIGIN en webrtc/request con retain=True
+    para que el CameraService lo reciba aunque no esté suscrito aún.
+    """
+    global _pending_offer
+    with _offer_lock:
+        _pending_offer = None
+    _offer_event.clear()
+
+    ok, err = _publish(T_CAM_REQUEST, MY_ORIGIN)
     if not ok:
-        return jsonify({"error": f"No se pudo enviar changeAltitude: {err}"}), 503
-    return ("", 204)
+        return _err(f"No se pudo enviar solicitud WebRTC: {err}")
 
-@app.route("/telemetry", methods=["GET"])
-def http_telemetry():
-    # Devuelve la última telemetría conocida
-    with telemetry_lock:
-        resp = dict(telemetry)
-    return jsonify(resp)
+    print(f"[WebRTC] Solicitud enviada → {T_CAM_REQUEST}  payload={MY_ORIGIN}")
+    return jsonify({"status": "requested", "origin": MY_ORIGIN})
 
-# Opcional: servir un archivo HTML desde / (si pones tu cliente en carpeta static/index.html)
-@app.route("/")
-def index():
-    try:
-        return send_from_directory("templates", "indexHTTP.html")
-    except Exception:
-        return "<h3>Servidor HTTP → MQTT gateway</h3><p>Coloca tu cliente en /templates/indexHTTP.html</p>"
 
-# ----------------------------------------------------
+@app.route("/webrtc/offer")
+def webrtc_get_offer():
+    """
+    El navegador hace polling aquí hasta recibir la oferta SDP
+    que el CameraService publicó en webrtc/offer/<MY_ORIGIN>.
+    Espera hasta 15 s antes de devolver 202 (sin oferta aún).
+    """
+    arrived = _offer_event.wait(timeout=15.0)
+    if not arrived:
+        return jsonify({"status": "waiting"}), 202
+
+    with _offer_lock:
+        offer = dict(_pending_offer) if _pending_offer else None
+
+    if offer is None:
+        return jsonify({"status": "waiting"}), 202
+
+    print("[WebRTC] Oferta enviada al navegador")
+    return jsonify({"status": "ok", "offer": offer})
+
+
+@app.route("/webrtc/answer", methods=["POST"])
+def webrtc_post_answer():
+    """
+    El navegador envía aquí su answer SDP después de procesar la oferta.
+    El gateway la reenvía al CameraService vía webrtc/answer/<MY_ORIGIN>.
+    """
+    data = request.get_json(silent=True)
+    if not data or "sdp" not in data or "type" not in data:
+        return _err("body debe ser {sdp, type}", 400)
+
+    payload = json.dumps({"sdp": data["sdp"], "type": data["type"]})
+    ok, err = _publish(T_CAM_ANSWER, payload)
+    if not ok:
+        return _err(f"No se pudo enviar answer: {err}")
+
+    print(f"[WebRTC] Answer reenviada → {T_CAM_ANSWER}")
+    return jsonify({"status": "ok"})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  TELEMETRÍA WATCHDOG  — reenvía startTelemetry si se silencia
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _telem_watchdog():
+    """Si no llega telemetría en 6 s, vuelve a pedirla."""
+    while True:
+        time.sleep(3)
+        with telemetry_lock:
+            last = telemetry["last_update_ts"]
+            connected = telemetry.get("service_connected", False)
+        if connected and (time.time() - last) > 6:
+            _publish(f"{TOPIC_CMD_PREFIX}/startTelemetry")
+            print("[WATCHDOG] Re-solicitando telemetría")
+
+
+threading.Thread(target=_telem_watchdog, daemon=True).start()
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  MAIN
+# ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    # Ejecutar Flask (no usar en producción; para pruebas).
-    print("Arrancando Flask en http://127.0.0.1:5000")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    print(f"[MAIN] Gateway arrancando — origen MQTT: {MY_ORIGIN}")
+    print("[MAIN] Flask en http://0.0.0.0:5000")
+    # use_reloader=False para no lanzar el hilo MQTT dos veces
+    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
