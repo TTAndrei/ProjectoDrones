@@ -1,5 +1,5 @@
 # =====================================================
-#  UTILIDAD: Limpiar todos los retains de slots y claim
+#  UTILIDAD: Limpiar todos los retains de slots, claim y cámara
 #  Ejecutar una vez para resetear el estado del broker.
 #
 #  Rellena las credenciales de cada slot y ejecuta:
@@ -22,6 +22,7 @@ HIVEMQ_USERS = [
 
 T_SLOT_PREFIX     = "slot/ocupado/"
 T_AUTOPILOT_CLAIM = "autopilot/claim"
+T_CAMERA          = "camera/frame"          # ← topic de la cámara
 # ─────────────────────────────────────────────────────────────────────────────
 
 def limpiar_con_usuario(user, password, topics):
@@ -32,6 +33,7 @@ def limpiar_con_usuario(user, password, topics):
     c.username_pw_set(user, password)
 
     conectado = {"ok": False}
+
     def on_connect(cli, ud, flags, rc):
         conectado["ok"] = rc == 0
 
@@ -69,6 +71,6 @@ if __name__ == "__main__":
         slot_topic = f"{T_SLOT_PREFIX}{idx + 1}"
         print(f"Slot {idx+1} ({creds['user']}):")
         limpiar_con_usuario(creds["user"], creds["password"],
-                            [slot_topic, T_AUTOPILOT_CLAIM])
+                            [slot_topic, T_AUTOPILOT_CLAIM, T_CAMERA])
 
-    print("\n=== Listo. Todos los slots y el claim han sido liberados. ===")
+    print("\n=== Listo. Todos los slots, el claim y la cámara han sido liberados. ===")
