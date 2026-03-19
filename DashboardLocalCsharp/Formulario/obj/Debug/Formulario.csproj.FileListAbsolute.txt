@@ -41,3 +41,17 @@ C:\Users\arnau\Source\Repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formula
 C:\Users\arnau\Source\Repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Newtonsoft.Json.dll
 C:\Users\arnau\Source\Repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Newtonsoft.Json.xml
 C:\Users\arnau\Source\Repos\TTAndrei\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Assets\drone-logoC.png
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Assets\drone-logoC.png
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Newtonsoft.Json.dll
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\obj\Debug\Formulario.Form2.resources
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\runtimes\win-x86\native\WebView2Loader.dll
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\runtimes\win-x64\native\WebView2Loader.dll
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\runtimes\win-arm64\native\WebView2Loader.dll
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Microsoft.Web.WebView2.Core.dll
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Microsoft.Web.WebView2.WinForms.dll
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Microsoft.Web.WebView2.Wpf.dll
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\MQTTnet.dll
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Microsoft.Web.WebView2.Core.xml
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Microsoft.Web.WebView2.WinForms.xml
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Microsoft.Web.WebView2.Wpf.xml
+C:\Users\Joan\PycharmProjects\ProjectoDrones\DashboardLocalCsharp\Formulario\bin\Debug\Newtonsoft.Json.xml

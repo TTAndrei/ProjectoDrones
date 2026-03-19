@@ -808,6 +808,7 @@ class CameraTrack(VideoStreamTrack):
         self._fractions = fractions
         self.cap = cv2.VideoCapture(0)
         self.frame_count = 0
+        self._last_boxes = []  # caché entre inferencias
         if not self.cap.isOpened():
             raise RuntimeError("No se pudo abrir la cámara")
         print("[CAM] Cámara abierta")
@@ -818,9 +819,25 @@ class CameraTrack(VideoStreamTrack):
         if not ret:
             await asyncio.sleep(0.033)
             return await self.recv()
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        vf = VideoFrame.from_ndarray(frame, format="rgb24")
-        vf.pts       = self.frame_count
+
+        # Inferencia cada 30 frames sin bloquear el event loop
+        if self.frame_count % 30 == 0 and detect_object_ids:
+            self._last_boxes = await asyncio.get_event_loop().run_in_executor(
+                None, run_detect, frame.copy()
+            )
+        elif not detect_object_ids:
+            self._last_boxes = []
+
+        # Dibujar boxes sobre el frame BGR ANTES de enviarlo por WebRTC
+        # Así todos los receptores (Python y C#) ven los boxes
+        for (x1, y1, x2, y2, label) in self._last_boxes:
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(frame, label, (x1, max(y1 - 8, 0)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
+
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        vf = VideoFrame.from_ndarray(frame_rgb, format="rgb24")
+        vf.pts = self.frame_count
         vf.time_base = self._fractions.Fraction(1, 30)
         return vf
 
@@ -831,7 +848,6 @@ class CameraTrack(VideoStreamTrack):
         except Exception:
             pass
         super().stop()
-
 
 def get_ice_config():
     print("[ICE] Obteniendo credenciales TURN de Metered...")
@@ -1006,9 +1022,44 @@ async def run_camera_global(mqtt_cam_client):
             cam_loop
         )
 
+    def _on_detect_classes(cli, userdata, msg):
+        """Recibe [0,2,15] desde el dashboard C# y actualiza detect_object_ids."""
+        try:
+            payload = msg.payload.decode("utf-8").strip()
+            if not payload:
+                return
+            import json as _json
+            ids = _json.loads(payload)
+            detect_object_ids.clear()
+            detect_object_ids.update(ids)
+            print(f"[COCO] Clases activas desde C#: {sorted(detect_object_ids)}")
+            if ids and yolo_model is None:
+                import threading as _threading
+                _threading.Thread(target=load_yolo, daemon=True).start()
+        except Exception as e:
+            print(f"[COCO] Error parseando detectClasses: {e}")
+
+    mqtt_cam_client.message_callback_add("webrtc/detectClasses", _on_detect_classes)
+
+
     mqtt_cam_client.message_callback_add(T_CAM_REQUEST, _on_request)
     mqtt_cam_client.subscribe(T_CAM_REQUEST)
     print(f"[CAM] Suscrito a solicitudes en {T_CAM_REQUEST}")
+
+    def _on_detect_classes(cli, userdata, msg):
+        try:
+            ids = json.loads(msg.payload.decode("utf-8").strip())
+            detect_object_ids.clear()
+            detect_object_ids.update(ids)
+            print(f"[COCO] Clases activas: {sorted(detect_object_ids)}")
+            if ids and yolo_model is None:
+                threading.Thread(target=load_yolo, daemon=True).start()
+        except Exception as e:
+            print(f"[COCO] Error: {e}")
+
+    mqtt_cam_client.message_callback_add("webrtc/detectClasses", _on_detect_classes)
+    mqtt_cam_client.subscribe("webrtc/detectClasses")
+    print("[CAM] Suscrito a webrtc/detectClasses")
 
     try:
         while not camera_stop_event.is_set():
@@ -1251,32 +1302,20 @@ def run_detect(frame):
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def show_video(track):
-    print("[VIDEO] Mostrando frames...")
-    frame_count, last_boxes = 0, []
-
+    print("[VIDEO] Mostrando frames (boxes incluidos en stream)...")
     while True:
         try:
             frame = await asyncio.wait_for(track.recv(), timeout=5.0)
             if isinstance(frame, VideoFrame):
                 img = frame.to_ndarray(format="bgr24")
-                frame_count += 1
-                # Inferencia cada 30 frames si hay clases activas
-                if frame_count % 30 == 0 and detect_object_ids:
-                    last_boxes = await asyncio.get_event_loop().run_in_executor(
-                        None, run_detect, img.copy()
-                    )
-                # Dibujar bounding boxes con nombre de clase
-                for (x1, y1, x2, y2, label) in last_boxes:
-                    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(img, label, (x1, y1 - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 cv2.imshow("Video Dron", img)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
         except asyncio.TimeoutError:
-            print(f"[VIDEO] Timeout — ICE={pc.iceConnectionState}")
+            print("[VIDEO] Timeout esperando frame")
         except Exception as e:
-            print(f"[VIDEO] {e}"); break
+            print(f"[VIDEO] {e}")
+            break
     cv2.destroyAllWindows()
 
 
