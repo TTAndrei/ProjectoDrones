@@ -209,6 +209,7 @@ def _mostrar_error_slots_llenos():
 import uuid as _uuid
 _INST_SUFFIX = _uuid.uuid4().hex[:6]
 MY_ORIGIN    = f"interfazGlobal_{_INST_SUFFIX}"
+AUTOPILOT_SOURCE_ID = f"DashboardTOTAL_autopilot_{_INST_SUFFIX}"
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  ESTADO GLOBAL
@@ -231,6 +232,12 @@ connectBtn = arm_takeOffBtn = landBtn = RTLBtn = None
 speedSldr  = gradesSldr = None
 root_window = None
 _connect_attempt_token = 0
+_dashboard_telem_source = None
+_dashboard_telem_source_last_ts = 0.0
+_dashboard_telem_source_last_log = 0.0
+_dashboard_last_telem_rx_ts = 0.0
+_dashboard_last_telem_request_ts = 0.0
+_dashboard_telem_watchdog_started = False
 
 # ── Terminal integrada ────────────────────────────────────────────────────────
 _stdout_redirector = None
@@ -613,8 +620,13 @@ def autopilot_publish_telemetry(telemetry_info):
     cli = client_autopilot          # captura local — puede ser None durante reconnect
     if cli is None:
         return
+    if not isinstance(telemetry_info, dict):
+        return
     try:
-        payload = json.dumps(telemetry_info)
+        payload_obj = dict(telemetry_info)
+        payload_obj["_source"] = AUTOPILOT_SOURCE_ID
+        payload_obj["_ts"] = time.time()
+        payload = json.dumps(payload_obj)
     except Exception:
         return
     with _telem_lock:
@@ -716,6 +728,9 @@ def autopilot_on_message(cli, userdata, message):
 
     elif command == 'changeNavSpeed':
         dron.changeNavSpeed(float(message.payload.decode("utf-8")))
+
+    elif command == 'changeAltitude':
+        dron.change_altitude(float(message.payload.decode("utf-8")), blocking=False)
 
     elif command == 'goto':
         coords = json.loads(message.payload.decode("utf-8"))
@@ -1451,6 +1466,8 @@ def start_webrtc_dashboard():
 
 def on_mqtt_message_dashboard(cli, userdata, msg):
     global _connect_attempt_token
+    global _dashboard_telem_source, _dashboard_telem_source_last_ts, _dashboard_telem_source_last_log
+    global _dashboard_last_telem_rx_ts
     topic = msg.topic
 
     if topic == f'autopilotServiceDemo/{MY_ORIGIN}/telemetryInfo':
@@ -1458,6 +1475,23 @@ def on_mqtt_message_dashboard(cli, userdata, msg):
             data = json.loads(msg.payload)
         except Exception:
             return
+
+        now = time.time()
+        source = str(data.get("_source", "unknown"))
+        can_switch = (_dashboard_telem_source is None or
+                      (now - _dashboard_telem_source_last_ts) > 8.0)
+
+        if can_switch and source != _dashboard_telem_source:
+            print(f"[TELEM] Fuente activa -> {source}")
+            _dashboard_telem_source = source
+        elif source != _dashboard_telem_source:
+            if (now - _dashboard_telem_source_last_log) > 5.0:
+                print(f"[TELEM] Ignorando telemetria de {source}; activa={_dashboard_telem_source}")
+                _dashboard_telem_source_last_log = now
+            return
+
+        _dashboard_telem_source_last_ts = now
+        _dashboard_last_telem_rx_ts = now
 
         def _update_telemetry_ui():
             altShowLbl['text']     = f"{round(data.get('alt', 0), 1)} m"
@@ -1662,6 +1696,32 @@ def stopTelem_global():  client_dashboard.publish(f'{MY_ORIGIN}/autopilotService
 def changeHeading_global(e): client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/changeHeading', str(gradesSldr.get()))
 def changeNavSpeed_global(e): client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/changeNavSpeed', str(speedSldr.get()))
 
+
+def _start_telemetry_watchdog_global():
+    global _dashboard_telem_watchdog_started
+    if _dashboard_telem_watchdog_started:
+        return
+    _dashboard_telem_watchdog_started = True
+
+    def _run():
+        global _dashboard_last_telem_request_ts
+        while True:
+            try:
+                now = time.time()
+                last_rx = _dashboard_last_telem_rx_ts
+                if client_dashboard is not None:
+                    stale = (last_rx > 0.0) and ((now - last_rx) > 5.0)
+                    can_retry = (now - _dashboard_last_telem_request_ts) > 6.0
+                    if stale and can_retry:
+                        client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/startTelemetry')
+                        _dashboard_last_telem_request_ts = now
+                        print("[TELEM] Watchdog: solicitando reanudacion de telemetria")
+            except Exception:
+                pass
+            time.sleep(1.0)
+
+    threading.Thread(target=_run, daemon=True).start()
+
 def connect_local():
     connectBtn.configure(text='Conectando...', fg='black', bg='yellow')
     try:
@@ -1851,6 +1911,7 @@ def crear_ventana(modo):
         # loop_start + reconnect_delay: paho reintentará la conexión si cae
         client_dashboard.reconnect_delay_set(min_delay=1, max_delay=30)
         client_dashboard.loop_start()
+        _start_telemetry_watchdog_global()
 
         _connect = connect_global;  _takeoff = takeoff_global
         _land    = land_global;     _RTL     = RTL_global
