@@ -1,0 +1,147 @@
+############  INSTALAR ##############
+# paho-mqtt, version 1.6.1
+#####################################
+
+import paho.mqtt.client as mqtt
+import json
+from dronLink.Dron import Dron
+
+# esta función sirve para publicar los eventos resultantes de las acciones solicitadas
+def publish_event (event):
+    global sending_topic, client
+    client.publish(sending_topic + '/'+event)
+
+
+def publish_telemetry_info (telemetry_info):
+    # cuando reciba datos de telemetría los publico
+    global sending_topic, client
+    client.publish(sending_topic + '/telemetryInfo', json.dumps(telemetry_info))
+
+def on_message(cli, userdata, message):
+    global  sending_topic, client
+    global dron
+    # el mensaje que se recibe tiene este formato:
+    #    "origen"/autopilotServiceDemo/"command"
+    # tengo que averiguar el origen y el command
+    splited = message.topic.split("/")
+    origin = splited[0] # aqui tengo el nombre de la aplicación que origina la petición
+    command = splited[2] # aqui tengo el comando
+
+    sending_topic = "autopilotServiceDemo/" + origin # lo necesitaré para enviar las respuestas
+
+    if command == 'connect':
+        # decide between simulator and real drone based on payload
+        # el dashboard publica solo el topic o bien incluye "REAL" como payload
+        payload = message.payload.decode("utf-8").strip()
+        if payload == 'REAL':
+            connection_string = 'COM3'
+            baud = 57600
+        else:
+            # por defecto conectarse al simulador TCP
+            connection_string = 'tcp:127.0.0.1:5763'
+            baud = 115200
+        dron.connect(connection_string, baud, freq=10)
+        print(f'Conectado al dron ({connection_string} @ {baud})')
+        publish_event('connected')
+
+    if command == 'arm_takeOff':
+        if dron.state == 'connected':
+            print ('vamos a armar')
+            dron.arm()
+            print ('vamos a despegar')
+            altura = int(message.payload.decode("utf-8"))
+            dron.takeOff(altura, blocking=False, callback=publish_event, params='flying')
+
+    if command == 'go':
+        if dron.state == 'flying':
+            direction = message.payload.decode("utf-8")
+            dron.go(direction)
+
+    if command == 'Land':
+        if dron.state == 'flying':
+            # operación no bloqueante. Cuando acabe publicará el evento correspondiente
+            dron.Land(blocking=False, callback=publish_event, params='landed')
+
+    if command == 'RTL':
+        if dron.state == 'flying':
+            # operación no bloqueante. Cuando acabe publicará el evento correspondiente
+            dron.RTL(blocking=False, callback=publish_event, params='atHome')
+
+    if command == 'startTelemetry':
+        # indico qué función va a procesar los datos de telemetría cuando se reciban
+        dron.send_telemetry_info(publish_telemetry_info)
+        print ('Empezamos a enviar información de telemetría')
+
+    if command == 'stopTelemetry':
+        dron.stop_sending_telemetry_info()
+
+    if command == 'changeHeading':
+        heading = float(message.payload.decode("utf-8"))
+        dron.changeHeading(heading)
+    
+    if command == 'changeNavSpeed':
+        speed = float(message.payload.decode("utf-8"))
+        dron.changeNavSpeed(speed)
+    
+    if command == 'changeAltitude':
+        altitud = float(message.payload.decode("utf-8"))
+        dron.changeAltitud(altitud)
+    
+    if command == 'goTo':
+        # el payload tiene el formato "lat,lon,alt"
+        payload = message.payload.decode("utf-8")
+        try:
+            # Separar por "/"
+            partes = payload.split('/')
+
+            # Cambiar coma por punto y convertir a float
+            lat, lon, alt = [float(p.replace(',', '.')) for p in partes]
+            dron.goto(lat, lon, alt, blocking=False)
+        except Exception as e:
+            print(f"Error al procesar el comando goTo con payload '{payload}': {e}")
+
+
+def on_connect(client, userdata, flags, rc):
+    global connected
+    if rc==0:
+        print("connected OK Returned code=",rc)
+        connected = True
+    else:
+        print("Bad connection Returned code=",rc)
+
+
+dron = Dron()
+
+client = mqtt.Client("autopilotServiceDemo", transport="websockets")
+
+# me conecto al broker publico y gratuito
+broker_address = "554f19f1f4944c978dd30b509d24afc0.s1.eu.hivemq.cloud"
+broker_port = 8884
+username = "autopilotServiceDemo"
+password = "qkdb!LasqvHfy9V"
+
+client.ws_set_options(path="/mqtt")
+
+# IMPORTANTE: Configurar TLS/SSL para puerto 8884
+client.tls_set(
+    ca_certs=None,
+    certfile=None,
+    keyfile=None,
+    cert_reqs=mqtt.ssl.CERT_REQUIRED,
+    tls_version=mqtt.ssl.PROTOCOL_TLSv1_2,
+    ciphers=None
+)
+client.tls_insecure_set(False)
+
+client.username_pw_set(username, password)
+
+
+client.on_message = on_message
+client.on_connect = on_connect
+client.connect (broker_address,broker_port)
+
+# me subscribo a todos los mensajes cuyo destino sea este servicio
+client.subscribe('+/autopilotServiceDemo/#')
+print ('AutopilotServiceDemo esperando peticiones')
+client.loop_forever()
+
