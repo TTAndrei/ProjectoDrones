@@ -8,6 +8,8 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Newtonsoft.Json;
+using System.Runtime;
+using System.Runtime.InteropServices;
 
 namespace Formulario
 {
@@ -24,8 +26,6 @@ namespace Formulario
             // -----------------------
             // Inicializar el mapa ya aquí
             // -----------------------
-            InitializeMap();
-
             var factory = new MqttFactory();
             client = factory.CreateMqttClient();
             this.Load += Form2_Load; // asociar el Load 
@@ -398,12 +398,38 @@ namespace Formulario
             client.PublishAsync(message);
         }
 
+        [ComVisible(true)]
+        public class ScriptManager
+        {
+            private Form2 form;
+
+            public ScriptManager(Form2 form)
+            {
+                this.form = form;
+            }
+
+            public void goTo(double lat, double lon)
+            {
+                form.goTo((float)lat, (float)lon);
+            }
+        }
+        public void goTo(float Lat, float Lon)
+        {
+            double Alt = Convert.ToDouble(altitudLbl.Text);
+            var message = (new MqttApplicationMessageBuilder()
+            .WithTopic("interfazGlobal/autopilotServiceDemo/goTo")
+            .WithPayload((Lat + "/" + Lon + "/" + Alt).ToString())
+            .Build());
+            client.PublishAsync(message);
+        }
+
         // Reemplaza InitializeMap()
         private void InitializeMap()
         {
             _mapLoaded = false;
             webBrowser1.ScriptErrorsSuppressed = true;
             webBrowser1.IsWebBrowserContextMenuEnabled = false;
+            webBrowser1.ObjectForScripting = new ScriptManager(this);
             webBrowser1.DocumentCompleted += WebBrowser1_DocumentCompleted;
             webBrowser1.DocumentText = GetMapHtml();
         }
@@ -453,6 +479,15 @@ namespace Formulario
     marker.setLatLng([la, lo]);
     map.setView([la, lo], Math.max(12, map.getZoom()));
   }}
+
+map.on('click', function(e) {{
+  var lat = e.latlng.lat;
+  var lon = e.latlng.lng;
+
+  // Llamar a tu función
+  window.external.goTo(lat, lon);
+}});
+
 </script>
 </body>
 </html>";
