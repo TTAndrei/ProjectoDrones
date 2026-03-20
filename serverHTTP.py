@@ -21,6 +21,7 @@ Arquitectura:
 """
 
 import json
+import os
 import threading
 import time
 import uuid
@@ -43,6 +44,7 @@ MQTT_PASS = "U8BM!Pv4D4R!isq"
 # Identificador único de esta instancia del gateway
 _INST = uuid.uuid4().hex[:6]
 MY_ORIGIN = f"mobileFlask_{_INST}"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Topics de comando (gateway → AutopilotService)
 # El AutopilotService escucha: +/autopilotServiceDemo/#
@@ -78,6 +80,8 @@ telemetry: dict = {
     "last_update_ts":        0,
 }
 telemetry_lock = Lock()
+mqtt_control_lock = Lock()
+mqtt_enabled = True
 
 # Señalización WebRTC: la oferta SDP que llega del CameraService
 _pending_offer: dict | None = None   # {"sdp": "...", "type": "offer"}
@@ -230,10 +234,16 @@ def _mqtt_loop():
     """Hilo MQTT con reconexión automática."""
     backoff = 1
     while True:
+        with mqtt_control_lock:
+            enabled = mqtt_enabled
+        if not enabled:
+            time.sleep(1)
+            continue
         try:
             print(f"[MQTT] Conectando a {MQTT_BROKER}:{MQTT_PORT}…")
             mqtt_client.connect(MQTT_BROKER, MQTT_PORT, MQTT_KEEPALIVE)
             mqtt_client.loop_forever()
+            backoff = 1
         except Exception as e:
             print(f"[MQTT] Error: {e} — reintentando en {backoff}s")
             time.sleep(backoff)
@@ -266,12 +276,59 @@ def index():
         )
 
 
+@app.route("/drone-logo.png")
+def drone_logo():
+    return send_from_directory(BASE_DIR, "drone-logo.png")
+
+
 # ── Telemetría ────────────────────────────────────────────────────────────────
 
 @app.route("/telemetry")
 def http_telemetry():
     with telemetry_lock:
         return jsonify(dict(telemetry))
+
+
+@app.route("/gateway/disconnect", methods=["POST"])
+def http_gateway_disconnect():
+    """Desconecta MQTT del gateway y libera la sesión en el broker."""
+    global mqtt_enabled
+
+    # Intento de parada limpia de telemetría antes de desconectar MQTT.
+    _publish(f"{TOPIC_CMD_PREFIX}/stopTelemetry")
+
+    with mqtt_control_lock:
+        mqtt_enabled = False
+
+    try:
+        mqtt_client.disconnect()
+    except Exception:
+        pass
+
+    with telemetry_lock:
+        telemetry["gateway_mqtt_connected"] = False
+        telemetry["last_event"] = "gatewayManualDisconnect"
+        telemetry["last_status"] = "Gateway MQTT desconectado manualmente"
+        telemetry["last_update_ts"] = int(time.time())
+
+    print("[MQTT] Desconexion manual solicitada")
+    return ("", 204)
+
+
+@app.route("/gateway/connect", methods=["POST"])
+def http_gateway_connect():
+    """Rehabilita la conexión MQTT del gateway tras desconexión manual."""
+    global mqtt_enabled
+    with mqtt_control_lock:
+        mqtt_enabled = True
+
+    with telemetry_lock:
+        telemetry["last_event"] = "gatewayManualConnect"
+        telemetry["last_status"] = "Gateway MQTT habilitado; reconectando"
+        telemetry["last_update_ts"] = int(time.time())
+
+    print("[MQTT] Reconexion manual solicitada")
+    return ("", 204)
 
 
 # ── Comandos de vuelo ─────────────────────────────────────────────────────────

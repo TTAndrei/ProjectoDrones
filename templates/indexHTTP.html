@@ -405,6 +405,7 @@
 
         let map;
         let marker;
+        let targetMarker;
         let pathLine;
         const pathCoords = [];
 
@@ -503,6 +504,31 @@
             }).addTo(map);
 
             marker = L.marker([41.3851, 2.1734]).addTo(map).bindPopup("Esperando posicion del dron");
+
+            map.on("click", async (e) => {
+                const lat = Number(e.latlng.lat);
+                const lon = Number(e.latlng.lng);
+
+                const flightAltInput = document.getElementById("flightAltInput");
+                const alt = Number((flightAltInput && flightAltInput.value) || 8);
+
+                if (targetMarker) {
+                    targetMarker.setLatLng([lat, lon]);
+                } else {
+                    targetMarker = L.marker([lat, lon]).addTo(map).bindPopup("Destino");
+                }
+
+                try {
+                    await postApi("/goto", { lat, lon, alt });
+                    setLog(voiceLog, `Goto enviado: ${lat.toFixed(6)}, ${lon.toFixed(6)} @ ${alt.toFixed(1)}m`);
+                    mapHint.textContent = "Destino enviado. El dron se dirige al punto seleccionado.";
+                } catch (err) {
+                    setLog(voiceLog, err.message);
+                    diagError.textContent = `Error: ${err.message}`;
+                    mapHint.textContent = "No se pudo enviar el destino. Revisa conexion/estado de vuelo.";
+                }
+            });
+
             setTimeout(() => map.invalidateSize(), 200);
         }
 

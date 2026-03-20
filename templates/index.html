@@ -277,6 +277,7 @@
 
                     <div class="control-row">
                         <button id="connectBtn" class="btn connect">Conectar + Telemetria</button>
+                        <button id="disconnectMqttBtn" class="btn land">Desconectar MQTT</button>
                         <button id="takeoffBtn" class="btn takeoff">Despegar</button>
                         <button id="landBtn" class="btn land">Aterrizar</button>
                         <button id="rtlBtn" class="btn rtl">RTL</button>
@@ -401,7 +402,30 @@
         let webrtcPc     = null;
         let videoRunning = false;
 
-        let map, marker, pathLine;
+        let map, marker, targetMarker, pathLine;
+        const droneIconUrl = "/drone-logo.png?v=2";
+        const droneFallbackIcon = L.divIcon({
+            html: "🚁",
+            className: "",
+            iconSize: [24, 24],
+            iconAnchor: [12, 12],
+        });
+        let droneIcon = droneFallbackIcon;
+
+        const _iconProbe = new Image();
+        _iconProbe.onload = () => {
+            droneIcon = L.icon({
+                iconUrl: droneIconUrl,
+                iconSize: [36, 36],
+                iconAnchor: [18, 18],
+                popupAnchor: [0, -18],
+            });
+            if (marker) marker.setIcon(droneIcon);
+        };
+        _iconProbe.onerror = () => {
+            droneIcon = droneFallbackIcon;
+        };
+        _iconProbe.src = droneIconUrl;
         const pathCoords = [];
 
         // ══════════════════════════════════════════════════
@@ -603,16 +627,31 @@
                 attribution: "&copy; OpenStreetMap contributors"
             }).addTo(map);
 
-            marker = L.marker([41.3851, 2.1734]).addTo(map).bindPopup("Esperando posicion del dron");
+            marker = L.marker([41.3851, 2.1734], {
+                icon: droneIcon,
+                interactive: false,
+                keyboard: false,
+            })
+                .addTo(map)
+                .bindPopup("Esperando posicion del dron");
 
             // Clic en el mapa → goto GPS
             map.on("click", async (e) => {
                 const { lat, lng } = e.latlng;
                 const alt = Number(document.getElementById("flightAltInput").value || 8);
+
+                if (targetMarker) {
+                    targetMarker.setLatLng([lat, lng]);
+                } else {
+                    targetMarker = L.marker([lat, lng]).addTo(map).bindPopup("Destino");
+                }
+
                 try {
                     await postApi("/goto", { lat, lon: lng, alt });
+                    mapHint.textContent = `Destino enviado: ${lat.toFixed(6)}, ${lng.toFixed(6)} @ ${alt.toFixed(1)} m`;
                 } catch (err) {
                     diagError.textContent = `Error goto: ${err.message}`;
+                    mapHint.textContent = "No se pudo enviar goto. Revisa estado de vuelo y conexion MQTT.";
                 }
             });
 
@@ -734,9 +773,19 @@
 
             document.getElementById("connectBtn").addEventListener("click", async () => {
                 try {
+                    await postApi("/gateway/connect");
                     await postApi("/connect");
                     await postApi("/startTelemetry");
                     stateStatus.textContent = "Estado dron: conectando";
+                } catch(e) { onErr(e); }
+            });
+
+            document.getElementById("disconnectMqttBtn").addEventListener("click", async () => {
+                try {
+                    await postApi("/gateway/disconnect");
+                    stateStatus.textContent = "Estado dron: gateway MQTT desconectado";
+                    diagError.textContent = "Gateway MQTT desconectado manualmente y slot liberado.";
+                    document.getElementById("mqttStatus").textContent = "Gateway MQTT: desconectado";
                 } catch(e) { onErr(e); }
             });
 
