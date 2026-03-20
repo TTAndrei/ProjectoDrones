@@ -815,10 +815,16 @@ class CameraTrack(VideoStreamTrack):
 
     async def recv(self):
         self.frame_count += 1
+
+        max_retries = 100
+        retries = 0
         ret, frame = self.cap.read()
-        if not ret:
+        while not ret:
+            retries += 1
+            if retries > max_retries:
+                raise RuntimeError("[CAM] Cámara no responde tras múltiples intentos")
             await asyncio.sleep(0.033)
-            return await self.recv()
+            ret, frame = self.cap.read()
 
         # Inferencia cada 30 frames sin bloquear el event loop
         if self.frame_count % 30 == 0 and detect_object_ids:
@@ -828,8 +834,7 @@ class CameraTrack(VideoStreamTrack):
         elif not detect_object_ids:
             self._last_boxes = []
 
-        # Dibujar boxes sobre el frame BGR ANTES de enviarlo por WebRTC
-        # Así todos los receptores (Python y C#) ven los boxes
+        # Dibujar boxes
         for (x1, y1, x2, y2, label) in self._last_boxes:
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(frame, label, (x1, max(y1 - 8, 0)),
