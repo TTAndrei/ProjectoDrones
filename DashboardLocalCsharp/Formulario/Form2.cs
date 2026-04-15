@@ -21,19 +21,34 @@
  *   - btnGaleria           : Button      — abrir galería
  *   - headingTrackBar      : TrackBar
  *   - velocidadTrackBar    : TrackBar
- *   - altitudebar          : TrackBar
+ *   - altitudebar          : TrackBar    — takeoff / changeAltitude (vuelo)
  *   - headingLbl           : Label
  *   - velocidadLbl         : Label
- *   - alturaBox            : TextBox
+ *   - alturaBox            : TextBox     — muestra valor de altitudebar
  *   - altitudLbl           : Label  (telemetría)
  *   - latitudLbl           : Label
  *   - longitudLbl          : Label
  *   - headLbl              : Label
- *   - LatBox               : TextBox
- *   - LonBox               : TextBox
- *   - altitudeBox          : TextBox
- *   - panelCoco            : Panel      — contendrá los checkboxes COCO
+ *   - LatBox               : TextBox  ┐
+ *   - LonBox               : TextBox  ├─ panel "Ir a punto" — compartido con clic en mapa
+ *   - altitudeBox          : TextBox  ┘
+ *   - ir_al_punto          : Button      — envía goto con LatBox / LonBox / altitudeBox
+ *   - panelCoco            : Panel      — checkboxes COCO
  *   - button9..button17    : Button     — D-pad navegación
+ *
+ * COMPORTAMIENTO DEL GOTO UNIFICADO:
+ *   • altitudeBox es la única fuente de altitud para goto.
+ *   • Se inicializa a 5.0 m al arrancar.
+ *   • La telemetría actualiza altitudeBox en cada tick con la altitud real
+ *     del dron, SALVO que el operador esté editando el campo en ese momento
+ *     (el TextBox tiene el foco). En cuanto pierde el foco vuelve a seguir
+ *     la telemetría, a menos que el operador haya escrito un valor válido,
+ *     que prevalece hasta el siguiente tick.
+ *   • Clic en el mapa → rellena LatBox y LonBox con las coordenadas
+ *     pulsadas y ejecuta goto con el valor actual de altitudeBox.
+ *   • Botón ir_al_punto → usa los tres campos tal cual.
+ *   • Enter en LatBox, LonBox o altitudeBox equivale a pulsar ir_al_punto.
+ *   • altitudebar sigue controlando exclusivamente takeoff / changeAltitude.
  */
 
 using MQTTnet;
@@ -58,7 +73,6 @@ namespace Formulario
         // ── MQTT ─────────────────────────────────────────────────────────
         private IMqttClient _client;
 
-        // Origen único: evita colisiones si hay varias instancias abiertas
         private readonly string _origin =
             "interfazGlobal_" + Guid.NewGuid().ToString("N").Substring(0, 6);
 
@@ -82,18 +96,19 @@ namespace Formulario
         private static readonly HttpClient _http = new HttpClient();
         private const string MeteredApi =
             "https://testconection1.metered.live/api/v1/turn/credentials?apiKey=57312a00508de97f6ca0758cce3935fe7670";
-        // Se rellena en InitWebView2 y se pasa al JS antes de cada handleOffer
-        private string _iceConfigJson = "null";   // JSON array de RTCIceServer, o null = solo STUN
+        private string _iceConfigJson = "null";
+
+        // ── Velocidad de goto ─────────────────────────────────────────────
+        // false  → el slider sigue la velocidad real del dron (groundSpeed).
+        // true   → el operador ha movido el slider manualmente; ya no se
+        //          sobreescribe con telemetría. Se envía changeNavSpeed antes
+        //          de cada goto para que el dron adopte la velocidad elegida.
+        private bool _speedManualOverride = false;
 
         // ── Detección COCO ────────────────────────────────────────────────
-        // Exactamente las mismas clases que COCO_GRUPOS en el dashboard Python,
-        // organizadas por grupo para mostrarlas igual en el panel.
-        // Formato: (grupo, nombre_display, class_id_coco)
         private static readonly (string Grupo, string Label, int Id)[] CocoClasses =
         {
-            // Personas
             ("Personas",    "Persona",    0),
-            // Vehículos
             ("Vehículos",   "Bicicleta",  1),
             ("Vehículos",   "Coche",      2),
             ("Vehículos",   "Moto",       3),
@@ -101,24 +116,20 @@ namespace Formulario
             ("Vehículos",   "Autobús",    5),
             ("Vehículos",   "Tren",       6),
             ("Vehículos",   "Camión",     7),
-            // Animales
             ("Animales",    "Pájaro",    14),
             ("Animales",    "Gato",      15),
             ("Animales",    "Perro",     16),
             ("Animales",    "Caballo",   17),
             ("Animales",    "Vaca",      19),
-            // Objetos
             ("Objetos",     "Mochila",   24),
             ("Objetos",     "Paraguas",  25),
             ("Objetos",     "Maleta",    28),
             ("Objetos",     "Pelota",    32),
             ("Objetos",     "Silla",     56),
             ("Objetos",     "Sofá",      57),
-            // Electrónica
             ("Electrónica", "Portátil",  63),
             ("Electrónica", "Móvil",     67),
             ("Electrónica", "Reloj",     74),
-            // Comida
             ("Comida",      "Banana",    46),
             ("Comida",      "Pizza",     53),
             ("Comida",      "Pastel",    55),
@@ -139,6 +150,7 @@ namespace Formulario
 
             ConfigurarDpad();
             ConfigurarPanelCoco();
+            ConfigurarPanelIrAPunto();
 
             this.Load += Form2_Load;
         }
@@ -165,15 +177,15 @@ namespace Formulario
 
             var dirs = new[]
             {
-                (button9,  "NW", "NorthWest", lg),
-                (button10, "N",  "North",     lg),
-                (button11, "NE", "NorthEast", lg),
-                (button12, "W",  "West",      lg),
-                (button13, "Stop", "Stop",    sm),
-                (button14, "E",  "East",      lg),
-                (button15, "SW", "SouthWest", lg),
-                (button16, "S",  "South",     lg),
-                (button17, "SE", "SouthEast", lg),
+                (button9,  "NW",   "NorthWest", lg),
+                (button10, "N",    "North",     lg),
+                (button11, "NE",   "NorthEast", lg),
+                (button12, "W",    "West",      lg),
+                (button13, "Stop", "Stop",      sm),
+                (button14, "E",    "East",      lg),
+                (button15, "SW",   "SouthWest", lg),
+                (button16, "S",    "South",     lg),
+                (button17, "SE",   "SouthEast", lg),
             };
             foreach (var (btn, text, tag, font) in dirs)
             {
@@ -185,31 +197,83 @@ namespace Formulario
         }
 
         // ═════════════════════════════════════════════════════════════════
-        //  PANEL COCO — checkboxes agrupados por categoría (igual que Python)
+        //  PANEL "IR A PUNTO" — configuración inicial
+        //
+        //  Los controles LatBox, LonBox, altitudeBox e ir_al_punto ya
+        //  existen en el designer. Aquí solo:
+        //    · fijamos el valor inicial de altitudeBox (5 m)
+        //    · añadimos tooltips
+        //    · permitimos Enter en cualquier campo como atajo al botón
+        // ═════════════════════════════════════════════════════════════════
+
+        private void ConfigurarPanelIrAPunto()
+        {
+            if (string.IsNullOrWhiteSpace(altitudeBox.Text))
+                altitudeBox.Text = "5.0";
+
+            // Enter en cualquier campo de goto dispara el envío
+            KeyEventHandler enterHandler = (s, e) =>
+            {
+                if (e.KeyCode == Keys.Enter)
+                {
+                    ir_al_punto_Click(ir_al_punto, EventArgs.Empty);
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                }
+            };
+            LatBox.KeyDown += enterHandler;
+            LonBox.KeyDown += enterHandler;
+            altitudeBox.KeyDown += enterHandler;
+
+            var tip = new ToolTip();
+            tip.SetToolTip(LatBox, "Latitud del destino (ej. 41.38512).\n" +
+                                        "Se rellena automáticamente al hacer clic en el mapa.");
+            tip.SetToolTip(LonBox, "Longitud del destino (ej. 2.17340).\n" +
+                                        "Se rellena automáticamente al hacer clic en el mapa.");
+            tip.SetToolTip(altitudeBox, "Altitud de goto en metros.\n" +
+                                        "Se actualiza automáticamente con la altitud real del dron.\n" +
+                                        "Edítala manualmente para fijar una altura distinta.\n" +
+                                        "Mientras estés escribiendo no se sobreescribe.");
+            tip.SetToolTip(ir_al_punto, "Enviar el dron a las coordenadas indicadas.\n" +
+                                        "Pulsa Enter en cualquier campo para el mismo efecto.");
+            tip.SetToolTip(velocidadTrackBar,
+                                        "Velocidad de goto (m/s).\n" +
+                                        "Muévelo para fijar una velocidad manual para los goto.\n" +
+                                        "Doble clic para volver a seguir la velocidad real del dron.");
+
+            // Doble clic en el slider: desactivar override y volver a seguir la telemetría
+            velocidadTrackBar.DoubleClick += (s, ev) =>
+            {
+                _speedManualOverride = false;
+                velocidadLbl.Text = velocidadTrackBar.Value.ToString() + " m/s";
+                System.Diagnostics.Debug.WriteLine("[SPEED] Override desactivado");
+            };
+        }
+
+        // ═════════════════════════════════════════════════════════════════
+        //  PANEL COCO
         // ═════════════════════════════════════════════════════════════════
 
         private void ConfigurarPanelCoco()
         {
             panelCoco.AutoScroll = true;
 
-            const int CBW = 108;   // ancho checkbox
-            const int CBH = 20;    // alto checkbox
-            const int COLS = 5;     // columnas por grupo (igual que Python COLS=5)
-            const int HGAP = 4;     // gap horizontal
-            const int VGAP = 3;     // gap vertical
-            const int LBLH = 16;    // alto etiqueta de grupo
+            const int CBW = 108;
+            const int CBH = 20;
+            const int COLS = 5;
+            const int HGAP = 4;
+            const int VGAP = 3;
+            const int LBLH = 16;
 
             int curY = 4;
 
-            // Agrupar por nombre de grupo manteniendo el orden de aparición
-            var grupos = new System.Collections.Generic.List<string>();
+            var grupos = new List<string>();
             foreach (var (grupo, _, __) in CocoClasses)
                 if (!grupos.Contains(grupo)) grupos.Add(grupo);
 
             foreach (var grupoNombre in grupos)
             {
-                // Etiqueta de grupo
-                var lbl = new Label
+                panelCoco.Controls.Add(new Label
                 {
                     Text = grupoNombre,
                     Location = new Point(4, curY),
@@ -217,12 +281,10 @@ namespace Formulario
                     Font = new Font("Arial", 8, FontStyle.Bold),
                     ForeColor = Color.DimGray,
                     Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
-                };
-                panelCoco.Controls.Add(lbl);
+                });
                 curY += LBLH + 2;
 
-                // Checkboxes del grupo
-                var clasesDel = new System.Collections.Generic.List<(string Label, int Id)>();
+                var clasesDel = new List<(string Label, int Id)>();
                 foreach (var (g, label, id) in CocoClasses)
                     if (g == grupoNombre) clasesDel.Add((label, id));
 
@@ -247,7 +309,6 @@ namespace Formulario
                 curY += rows * (CBH + VGAP) + 6;
             }
 
-            // Botón "Desactivar todas"
             var btnClear = new Button
             {
                 Text = "✕  Desactivar todas",
@@ -265,35 +326,13 @@ namespace Formulario
             panelCoco.Controls.Add(btnClear);
         }
 
-        /// <summary>
-        /// Cada vez que cambia un checkbox, publica la lista de class IDs activos.
-        ///
-        /// Topic: webrtc/detectClasses  (topic fijo, sin prefijo de origen)
-        /// Payload: JSON array de ints — p.ej. [0, 2, 15]
-        ///
-        /// El CameraService Python debe suscribirse a este topic y actualizar
-        /// detect_object_ids. Añade en el CameraService (en on_message del cliente MQTT):
-        ///
-        ///   elif topic == 'webrtc/detectClasses':
-        ///       ids = json.loads(payload)
-        ///       detect_object_ids.clear()
-        ///       detect_object_ids.update(ids)
-        ///       if ids and yolo_model is None:
-        ///           threading.Thread(target=load_yolo, daemon=True).start()
-        ///       print(f"[COCO] Clases activas: {sorted(detect_object_ids)}")
-        ///
-        /// Y en ConectarMQTT del CameraService suscribirse a:
-        ///   await _client.SubscribeAsync("webrtc/detectClasses");
-        /// </summary>
         private void CocoCheck_Changed(object sender, EventArgs e)
         {
             var active = new List<int>();
             foreach (var kv in _cocoChecks)
                 if (kv.Value.Checked) active.Add(kv.Key);
 
-            string payload = JsonConvert.SerializeObject(active);
-            // Topic fijo que el CameraService escucha
-            Publish("webrtc/detectClasses", payload);
+            Publish("webrtc/detectClasses", JsonConvert.SerializeObject(active));
         }
 
         // ═════════════════════════════════════════════════════════════════
@@ -321,9 +360,7 @@ namespace Formulario
             {
                 try
                 {
-                    // Telemetría + eventos autopilot
                     await _client.SubscribeAsync(SubPattern);
-                    // Señalización WebRTC: oferta del CameraService
                     await _client.SubscribeAsync($"webrtc/offer/{_origin}");
                 }
                 catch (Exception ex)
@@ -349,7 +386,6 @@ namespace Formulario
                 string topic = e.ApplicationMessage.Topic;
                 string payload = "";
                 try { payload = Encoding.UTF8.GetString(e.ApplicationMessage.Payload); } catch { }
-
                 this.Invoke(new Action(() => ProcesarMensaje(topic, payload)));
             });
 
@@ -365,15 +401,12 @@ namespace Formulario
                 return;
             }
 
-            // ── Señalización WebRTC ──────────────────────────────────────
             if (topic == $"webrtc/offer/{_origin}" && !string.IsNullOrEmpty(payload))
             {
-                // Pasa la oferta SDP al WebView2 para que la procese
                 PasarOfertaAlWebView(payload);
                 return;
             }
 
-            // ── Eventos autopilot ────────────────────────────────────────
             if (topic.EndsWith("/connected"))
             {
                 but_connect.Text = "Conectado"; but_connect.BackColor = Color.Green; but_connect.ForeColor = Color.White;
@@ -417,8 +450,6 @@ namespace Formulario
 
         private void but_connect_Click(object sender, EventArgs e)
         {
-            // Descomenta si añades un CheckBox "chkReal" al formulario:
-            // string p = chkReal.Checked ? "REAL" : "";
             Publish(CmdTopic("connect"), "");
             but_connect.Text = "Conectando..."; but_connect.BackColor = Color.Yellow; but_connect.ForeColor = Color.Black;
         }
@@ -429,8 +460,18 @@ namespace Formulario
             despegarBtn.BackColor = Color.Yellow;
         }
 
-        private void navButton_Click(object sender, EventArgs e) =>
-            Publish(CmdTopic("go"), ((Button)sender).Tag.ToString());
+        private void navButton_Click(object sender, EventArgs e)
+        {
+            string direction = ((Button)sender).Tag.ToString();
+
+            // Si hay velocidad manual activa, incrustarla en el payload como "Direction|velocidad"
+            // para que el autopilot Python aplique changeNavSpeed antes del go, en el mismo mensaje.
+            string payload = (_speedManualOverride && direction != "Stop")
+                ? $"{direction}|{velocidadTrackBar.Value}"
+                : direction;
+
+            Publish(CmdTopic("go"), payload);
+        }
 
         private void aterrizarBtn_Click(object sender, EventArgs e)
         {
@@ -450,7 +491,7 @@ namespace Formulario
         private void detenerTelemetriaBtn_Click(object sender, EventArgs e) =>
             Publish(CmdTopic("stopTelemetry"));
 
-        // ── Trackbars ────────────────────────────────────────────────────
+        // ── Trackbars ─────────────────────────────────────────────────────
 
         private void headingTrackBar_Scroll(object sender, EventArgs e) =>
             headingLbl.Text = headingTrackBar.Value.ToString();
@@ -459,43 +500,136 @@ namespace Formulario
             Publish(CmdTopic("changeHeading"), headingTrackBar.Value.ToString());
 
         private void velocidadTrackBar_Scroll(object sender, EventArgs e) =>
-            velocidadLbl.Text = velocidadTrackBar.Value.ToString();
+            velocidadLbl.Text = (_speedManualOverride ? "≤ " : "") + velocidadTrackBar.Value.ToString() + " m/s";
 
-        private void velocidadTrackBar_MouseUp(object sender, MouseEventArgs e) =>
-            Publish(CmdTopic("changeNavSpeed"), velocidadTrackBar.Value.ToString());
+        private void velocidadTrackBar_MouseUp(object sender, MouseEventArgs e)
+        {
+            // Fijar override: la velocidad elegida se aplicará en el próximo
+            // goto o go. No se envía changeNavSpeed ahora para no interferir
+            // con un movimiento en curso.
+            _speedManualOverride = true;
+            velocidadLbl.Text = "≤ " + velocidadTrackBar.Value.ToString() + " m/s";
+        }
 
+        // altitudebar → takeoff / changeAltitude en vuelo.
+        // NO tiene relación con la altitud del goto.
         private void altitudebar_Scroll(object sender, EventArgs e) =>
             alturaBox.Text = altitudebar.Value.ToString();
 
         private void altitudebar_MouseUp(object sender, MouseEventArgs e) =>
             Publish(CmdTopic("changeAltitude"), altitudebar.Value.ToString());
 
-        // ── Goto manual ───────────────────────────────────────────────────
+        // ═════════════════════════════════════════════════════════════════
+        //  GOTO UNIFICADO — botón ir_al_punto + clic en el mapa
+        // ═════════════════════════════════════════════════════════════════
 
+        /// <summary>
+        /// Botón "Ir al punto": usa LatBox, LonBox y altitudeBox tal cual
+        /// los ha escrito el operador.
+        /// </summary>
         private void ir_al_punto_Click(object sender, EventArgs e)
         {
-            var ci = System.Globalization.CultureInfo.InvariantCulture;
-            if (!double.TryParse(LatBox.Text, System.Globalization.NumberStyles.Float, ci, out double lat) ||
-                !double.TryParse(LonBox.Text, System.Globalization.NumberStyles.Float, ci, out double lon) ||
-                !double.TryParse(altitudeBox.Text, System.Globalization.NumberStyles.Float, ci, out double alt))
-            {
-                MessageBox.Show("Coordenadas no válidas. Usa punto como separador decimal.");
+            if (!ParseGotoFields(out double lat, out double lon, out double alt))
                 return;
-            }
+
             SendGoto(lat, lon, alt);
+
+            // Feedback visual breve en el botón
+            ir_al_punto.BackColor = Color.Green;
+            ir_al_punto.ForeColor = Color.White;
+            var timer = new System.Windows.Forms.Timer { Interval = 1000 };
+            timer.Tick += (s, _) =>
+            {
+                ir_al_punto.BackColor = Color.DarkOrange;
+                ir_al_punto.ForeColor = Color.Black;
+                timer.Stop();
+                timer.Dispose();
+            };
+            timer.Start();
         }
 
-        public void GoToFromMap(double lat, double lon) =>
-            SendGoto(lat, lon, altitudebar.Value);
+        /// <summary>
+        /// Llamado desde ScriptManager cuando el usuario hace clic en el mapa.
+        /// Rellena LatBox y LonBox con el punto pulsado y ejecuta goto
+        /// usando el valor que el operador haya escrito en altitudeBox.
+        /// </summary>
+            public void GoToFromMap(double lat, double lon)
+            {
+                var ci = System.Globalization.CultureInfo.InvariantCulture;
+                LatBox.Text = lat.ToString("0.00000000", ci);
+                LonBox.Text = lon.ToString("0.00000000", ci);
+                // altitudeBox queda intacto — el operador controla la altitud
+
+                if (!ParseGotoFields(out double parsedLat, out double parsedLon, out double alt))
+                    return;
+
+                SendGoto(parsedLat, parsedLon, alt);
+            }
+
+        /// <summary>
+        /// Lee y valida los tres campos de goto.
+        /// Acepta coma o punto como separador decimal.
+        /// Devuelve false y muestra aviso si algún campo no es válido.
+        /// </summary>
+        private bool ParseGotoFields(out double lat, out double lon, out double alt)
+        {
+            var ci = System.Globalization.CultureInfo.InvariantCulture;
+            lat = lon = alt = 0;
+
+            string latText = LatBox.Text.Trim().Replace(',', '.');
+            string lonText = LonBox.Text.Trim().Replace(',', '.');
+
+            string altText = altitudLbl.Text.Trim().Replace(',', '.');
+
+            if (!double.TryParse(latText, System.Globalization.NumberStyles.Float, ci, out lat) ||
+                !double.TryParse(lonText, System.Globalization.NumberStyles.Float, ci, out lon))
+            {
+                MessageBox.Show("Latitud o longitud no válidas.\nUsa punto o coma como separador decimal.",
+                                "Goto — coordenadas", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+
+            if (!double.TryParse(altText, System.Globalization.NumberStyles.Float, ci, out alt)
+                || alt < 0.5)
+            {
+                MessageBox.Show("Altitud no válida. Introduce un número ≥ 0.5 m.",
+                                "Goto — altitud", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                altitudeBox.Text = "5.0";   // restaurar valor seguro
+                return false;
+            }
+
+            return true;
+        }
 
         private void SendGoto(double lat, double lon, double alt)
         {
-            var payload = JsonConvert.SerializeObject(new { lat, lon, alt });
+            string payload;
+            if (_speedManualOverride)
+            {
+                // Incluir la velocidad en el mismo mensaje para que el autopilot
+                // aplique changeNavSpeed atómicamente antes del goto
+                payload = JsonConvert.SerializeObject(new
+                {
+                    lat,
+                    lon,
+                    alt,
+                    speed = velocidadTrackBar.Value
+                });
+                System.Diagnostics.Debug.WriteLine(
+                    $"[MAP] goto → {lat:0.00000000}, {lon:0.00000000}, {alt:0.0} m @ {velocidadTrackBar.Value} m/s");
+            }
+            else
+            {
+                payload = JsonConvert.SerializeObject(new { lat, lon, alt });
+                System.Diagnostics.Debug.WriteLine(
+                    $"[MAP] goto → {lat:0.00000000}, {lon:0.00000000}, {alt:0.0} m");
+            }
             Publish(CmdTopic("goto"), payload);
         }
 
         // ═════════════════════════════════════════════════════════════════
         //  TELEMETRÍA
+        //  altitudeBox (goto) nunca se toca aquí.
         // ═════════════════════════════════════════════════════════════════
 
         private void ProcesarTelemetria(string payload)
@@ -512,6 +646,13 @@ namespace Formulario
                 latitudLbl.Text = lat.ToString("0.00000000");
                 longitudLbl.Text = lon.ToString("0.00000000");
                 headLbl.Text = heading.ToString("0.00");
+
+                // Sincronizar altitudeBox con la altitud real del dron,
+                // pero solo si el operador no está editando el campo en este momento.
+                if (!altitudeBox.Focused && alt > 0.0)
+                    altitudeBox.Text = alt.ToString("0.0");
+
+
 
                 if (lat != 0.0 || lon != 0.0)
                     UpdateMapPosition(lat, lon);
@@ -565,7 +706,8 @@ namespace Formulario
   }}).addTo(map);
 
   var icon = L.icon({{iconUrl:'data:image/png;base64,{base64}',iconSize:[32,32],iconAnchor:[16,16]}});
-  var marker = L.marker([0,0],{{icon:icon}}).addTo(map);
+  var marker     = L.marker([0,0],{{icon:icon}}).addTo(map);
+  var targetMark = null;
   var path = null, coords = [];
 
   function updatePosition(lat,lon){{
@@ -581,6 +723,10 @@ namespace Formulario
   }}
 
   map.on('click',function(e){{
+    if(targetMark) map.removeLayer(targetMark);
+    targetMark = L.circleMarker([e.latlng.lat,e.latlng.lng],{{
+      radius:7, color:'#2ecc71', fillColor:'#2ecc71', fillOpacity:0.8, weight:2
+    }}).addTo(map);
     window.external.goTo(e.latlng.lat, e.latlng.lng);
   }});
 </script>
@@ -616,10 +762,7 @@ namespace Formulario
         {
             try
             {
-                // 1. Obtener credenciales TURN de Metered (mismo endpoint que el Python)
                 await FetchTurnCredentials();
-
-                // 2. Inicializar WebView2
                 await webView2Video.EnsureCoreWebView2Async(null);
                 webView2Video.CoreWebView2.WebMessageReceived += WebView2_MessageReceived;
                 webView2Video.NavigateToString(GetVideoHtml());
@@ -633,24 +776,16 @@ namespace Formulario
             }
         }
 
-        /// <summary>
-        /// Llama a la API de Metered y construye el JSON de iceServers que
-        /// se pasará al RTCPeerConnection del navegador, incluyendo TURN.
-        /// Si falla (sin internet, API caída) deja _iceConfigJson en null
-        /// y el WebView2 usará solo STUN de Google como fallback.
-        /// </summary>
         private async Task FetchTurnCredentials()
         {
             try
             {
                 string json = await _http.GetStringAsync(MeteredApi);
-                // Metered devuelve: [{"urls":"turn:...","username":"x","credential":"y"}, ...]
                 dynamic servers = JsonConvert.DeserializeObject(json);
                 var iceServers = new List<object>();
 
                 foreach (var s in servers)
                 {
-                    // urls puede ser string o array
                     object urls = s.urls is Newtonsoft.Json.Linq.JArray
                         ? (object)s.urls.ToObject<string[]>()
                         : (object)(string)s.urls;
@@ -661,78 +796,50 @@ namespace Formulario
                         iceServers.Add(new { urls });
                 }
 
-                // Añadir siempre STUN de Google como primer servidor
                 iceServers.Insert(0, new { urls = "stun:stun.l.google.com:19302" });
-
                 _iceConfigJson = JsonConvert.SerializeObject(iceServers);
-                System.Diagnostics.Debug.WriteLine($"[ICE] {iceServers.Count} servidores cargados (incluye TURN)");
+                System.Diagnostics.Debug.WriteLine($"[ICE] {iceServers.Count} servidores cargados");
             }
             catch (Exception ex)
             {
-                // Fallback graceful: solo STUN
                 _iceConfigJson = JsonConvert.SerializeObject(new[]
                 {
                     new { urls = "stun:stun.l.google.com:19302" },
                     new { urls = "stun:stun1.l.google.com:19302" },
                 });
-                System.Diagnostics.Debug.WriteLine($"[ICE] Error obteniendo TURN, usando solo STUN: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[ICE] Fallback STUN: {ex.Message}");
             }
         }
 
-        /// <summary>
-        /// Mensajes que llegan desde JavaScript dentro del WebView2.
-        /// Formato: { "type": "photo", "data": "base64png..." }
-        ///        | { "type": "answer", "sdp": "...", "sdpType": "answer" }
-        ///        | { "type": "log", "msg": "..." }
-        /// </summary>
         private void WebView2_MessageReceived(object sender,
             CoreWebView2WebMessageReceivedEventArgs e)
         {
             try
             {
-                // WebMessageAsJson siempre existe en todas las versiones del SDK.
-                // Cuando JS hace postMessage(JSON.stringify(obj)), el WebView2
-                // recibe el string y lo re-serializa como JSON string, así que
-                // WebMessageAsJson contiene algo como:
-                //   "{\"type\":\"log\",\"msg\":\"foo\"}"   ← string JSON con comillas externas
-                // Hay que deserializarlo una vez para obtener el string interior,
-                // y luego deserializarlo otra vez para obtener el objeto.
                 string outerJson = e.WebMessageAsJson;
-                string raw;
-
-                // Si empieza con '"' es un JSON string (el caso normal con postMessage(string))
-                // → deserializar una vez para quitar las comillas externas
-                if (outerJson != null && outerJson.TrimStart().StartsWith("\""))
-                    raw = JsonConvert.DeserializeObject<string>(outerJson);
-                else
-                    raw = outerJson;   // ya es un objeto JSON directo (raro, pero posible)
+                string raw = (outerJson != null && outerJson.TrimStart().StartsWith("\""))
+                    ? JsonConvert.DeserializeObject<string>(outerJson)
+                    : outerJson;
 
                 dynamic msg = JsonConvert.DeserializeObject(raw);
                 string type = (string)msg.type;
 
                 if (type == "photo")
-                {
                     GuardarFoto((string)msg.data);
-                }
                 else if (type == "answer")
                 {
-                    // Reenviar la answer SDP al CameraService por MQTT
-                    string answerPayload = JsonConvert.SerializeObject(new
+                    Publish($"webrtc/answer/{_origin}", JsonConvert.SerializeObject(new
                     {
                         sdp = (string)msg.sdp,
                         type = (string)msg.sdpType,
-                    });
-                    Publish($"webrtc/answer/{_origin}", answerPayload);
+                    }));
                     System.Diagnostics.Debug.WriteLine("[WebRTC] Answer publicada");
                 }
                 else if (type == "log")
                 {
                     string logMsg = (string)msg.msg;
                     System.Diagnostics.Debug.WriteLine($"[WebView2] {logMsg}");
-
-                    // Marcar stream activo cuando el JS confirma que tiene vídeo
-                    if (logMsg == "stream_active")
-                        _videoConnected = true;
+                    if (logMsg == "stream_active") _videoConnected = true;
                 }
             }
             catch (Exception ex)
@@ -741,18 +848,10 @@ namespace Formulario
             }
         }
 
-        // ── Señalización ──────────────────────────────────────────────────
-
         private void btnVideoConectar_Click(object sender, EventArgs e)
         {
-            if (!_webView2Ready)
-            {
-                MessageBox.Show("WebView2 aún no está listo.");
-                return;
-            }
-            // 1. Pedir stream al CameraService publicando el origen
+            if (!_webView2Ready) { MessageBox.Show("WebView2 aún no está listo."); return; }
             Publish("webrtc/request", _origin);
-            // 2. El WebView2 espera la oferta (llega por MQTT → PasarOfertaAlWebView)
             webView2Video.CoreWebView2.ExecuteScriptAsync("setStatus('Esperando oferta SDP...')");
             btnVideoConectar.Enabled = false;
             btnVideoDetener.Enabled = true;
@@ -767,31 +866,20 @@ namespace Formulario
             btnVideoDetener.Enabled = false;
         }
 
-        /// <summary>
-        /// Pasa la oferta SDP al WebView2 de forma segura usando PostWebMessageAsJson,
-        /// que no requiere ningún escaping manual y soporta cualquier contenido en el SDP.
-        /// El JS la recibe en el listener de 'message' y llama a handleOffer().
-        /// </summary>
         private void PasarOfertaAlWebView(string offerJson)
         {
             if (!_webView2Ready) return;
             try
             {
-                // Construir el mensaje envelope que el JS espera:
-                // { "type": "offer_envelope", "offer": {...}, "iceServers": [...] }
                 var offer = JsonConvert.DeserializeObject(offerJson);
                 var iceServers = JsonConvert.DeserializeObject(_iceConfigJson);
                 string envelope = JsonConvert.SerializeObject(new
                 {
                     type = "offer_envelope",
-                    offer = offer,
-                    iceServers = iceServers,
+                    offer,
+                    iceServers,
                 });
-
-                // PostWebMessageAsString envía el string tal cual al listener JS
-                // sin ningún escaping ni inyección en código — es el método correcto
                 webView2Video.CoreWebView2.PostWebMessageAsString(envelope);
-                System.Diagnostics.Debug.WriteLine("[WebRTC] Oferta enviada al WebView2 (PostWebMessageAsString)");
             }
             catch (Exception ex)
             {
@@ -799,16 +887,9 @@ namespace Formulario
             }
         }
 
-        // ── Captura de fotos ──────────────────────────────────────────────
-
         private void btnCapturar_Click(object sender, EventArgs e)
         {
-            if (!_videoConnected)
-            {
-                MessageBox.Show("No hay stream de video activo.");
-                return;
-            }
-            // Solicitar al JS que capture el frame actual y lo envíe como base64
+            if (!_videoConnected) { MessageBox.Show("No hay stream de video activo."); return; }
             webView2Video.CoreWebView2.ExecuteScriptAsync("capturePhoto()");
         }
 
@@ -816,7 +897,6 @@ namespace Formulario
         {
             try
             {
-                // Quitar el prefijo data URI si viene incluido
                 string data = base64Png.Contains(",")
                     ? base64Png.Substring(base64Png.IndexOf(',') + 1)
                     : base64Png;
@@ -826,29 +906,22 @@ namespace Formulario
                     $"foto_{DateTime.Now:yyyyMMdd_HHmmss_fff}.png");
                 File.WriteAllBytes(filename, bytes);
                 _photoFiles.Add(filename);
-
-                System.Diagnostics.Debug.WriteLine($"[Foto] Guardada: {filename}");
-                // Notificación discreta en el título del form
                 this.Text = $"Dashboard — Foto guardada ({_photoFiles.Count} total)";
             }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Error guardando foto: {ex.Message}");
-            }
+            catch (Exception ex) { MessageBox.Show($"Error guardando foto: {ex.Message}"); }
         }
 
         private void btnGaleria_Click(object sender, EventArgs e)
         {
             if (_photoFiles.Count == 0)
             {
-                MessageBox.Show("Aún no hay fotos capturadas.\nUsa el botón 'Capturar foto' mientras hay stream activo.");
+                MessageBox.Show("Aún no hay fotos capturadas.");
                 return;
             }
-            var galeria = new FormGallery(_photoFiles);
-            galeria.Show();
+            new FormGallery(_photoFiles).Show();
         }
 
-        // ── HTML del WebView2 (WebRTC + captura) ──────────────────────────
+        // ── HTML del WebView2 ─────────────────────────────────────────────
 
         private string GetVideoHtml()
         {
@@ -910,7 +983,6 @@ async function handleOffer(offer, iceServers) {
 
     var config = { iceServers: iceServers || [{urls:'stun:stun.l.google.com:19302'}] };
     send({type:'log', msg:'ice_servers: ' + config.iceServers.length});
-
     pc = new RTCPeerConnection(config);
 
     pc.ontrack = function(ev) {
@@ -988,6 +1060,11 @@ function capturePhoto() {
 </script>
 </body>
 </html>";
+        }
+
+        private void button11_Click(object sender, EventArgs e)
+        {
+
         }
     }
 }
