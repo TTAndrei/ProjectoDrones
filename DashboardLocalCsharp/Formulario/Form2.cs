@@ -150,7 +150,6 @@ namespace Formulario
 
             ConfigurarDpad();
             ConfigurarPanelCoco();
-            ConfigurarPanelIrAPunto();
 
             this.Load += Form2_Load;
         }
@@ -205,50 +204,6 @@ namespace Formulario
         //    · añadimos tooltips
         //    · permitimos Enter en cualquier campo como atajo al botón
         // ═════════════════════════════════════════════════════════════════
-
-        private void ConfigurarPanelIrAPunto()
-        {
-            if (string.IsNullOrWhiteSpace(altitudeBox.Text))
-                altitudeBox.Text = "5.0";
-
-            // Enter en cualquier campo de goto dispara el envío
-            KeyEventHandler enterHandler = (s, e) =>
-            {
-                if (e.KeyCode == Keys.Enter)
-                {
-                    ir_al_punto_Click(ir_al_punto, EventArgs.Empty);
-                    e.Handled = true;
-                    e.SuppressKeyPress = true;
-                }
-            };
-            LatBox.KeyDown += enterHandler;
-            LonBox.KeyDown += enterHandler;
-            altitudeBox.KeyDown += enterHandler;
-
-            var tip = new ToolTip();
-            tip.SetToolTip(LatBox, "Latitud del destino (ej. 41.38512).\n" +
-                                        "Se rellena automáticamente al hacer clic en el mapa.");
-            tip.SetToolTip(LonBox, "Longitud del destino (ej. 2.17340).\n" +
-                                        "Se rellena automáticamente al hacer clic en el mapa.");
-            tip.SetToolTip(altitudeBox, "Altitud de goto en metros.\n" +
-                                        "Se actualiza automáticamente con la altitud real del dron.\n" +
-                                        "Edítala manualmente para fijar una altura distinta.\n" +
-                                        "Mientras estés escribiendo no se sobreescribe.");
-            tip.SetToolTip(ir_al_punto, "Enviar el dron a las coordenadas indicadas.\n" +
-                                        "Pulsa Enter en cualquier campo para el mismo efecto.");
-            tip.SetToolTip(velocidadTrackBar,
-                                        "Velocidad de goto (m/s).\n" +
-                                        "Muévelo para fijar una velocidad manual para los goto.\n" +
-                                        "Doble clic para volver a seguir la velocidad real del dron.");
-
-            // Doble clic en el slider: desactivar override y volver a seguir la telemetría
-            velocidadTrackBar.DoubleClick += (s, ev) =>
-            {
-                _speedManualOverride = false;
-                velocidadLbl.Text = velocidadTrackBar.Value.ToString() + " m/s";
-                System.Diagnostics.Debug.WriteLine("[SPEED] Override desactivado");
-            };
-        }
 
         // ═════════════════════════════════════════════════════════════════
         //  PANEL COCO
@@ -527,26 +482,6 @@ namespace Formulario
         /// Botón "Ir al punto": usa LatBox, LonBox y altitudeBox tal cual
         /// los ha escrito el operador.
         /// </summary>
-        private void ir_al_punto_Click(object sender, EventArgs e)
-        {
-            if (!ParseGotoFields(out double lat, out double lon, out double alt))
-                return;
-
-            SendGoto(lat, lon, alt);
-
-            // Feedback visual breve en el botón
-            ir_al_punto.BackColor = Color.Green;
-            ir_al_punto.ForeColor = Color.White;
-            var timer = new System.Windows.Forms.Timer { Interval = 1000 };
-            timer.Tick += (s, _) =>
-            {
-                ir_al_punto.BackColor = Color.DarkOrange;
-                ir_al_punto.ForeColor = Color.Black;
-                timer.Stop();
-                timer.Dispose();
-            };
-            timer.Start();
-        }
 
         /// <summary>
         /// Llamado desde ScriptManager cuando el usuario hace clic en el mapa.
@@ -555,15 +490,10 @@ namespace Formulario
         /// </summary>
             public void GoToFromMap(double lat, double lon)
             {
-                var ci = System.Globalization.CultureInfo.InvariantCulture;
-                LatBox.Text = lat.ToString("0.00000000", ci);
-                LonBox.Text = lon.ToString("0.00000000", ci);
-                // altitudeBox queda intacto — el operador controla la altitud
+            // altitudeBox queda intacto — el operador controla la altitud
 
-                if (!ParseGotoFields(out double parsedLat, out double parsedLon, out double alt))
-                    return;
+            ParseGotoFields(lat, lon);
 
-                SendGoto(parsedLat, parsedLon, alt);
             }
 
         /// <summary>
@@ -571,61 +501,52 @@ namespace Formulario
         /// Acepta coma o punto como separador decimal.
         /// Devuelve false y muestra aviso si algún campo no es válido.
         /// </summary>
-        private bool ParseGotoFields(out double lat, out double lon, out double alt)
+        private bool ParseGotoFields(double lat, double lon)
         {
-            var ci = System.Globalization.CultureInfo.InvariantCulture;
-            lat = lon = alt = 0;
+            string latText = Convert.ToString(lat);
+            string lonText = Convert.ToString(lon);
+            LatBox.Text = latText;
+            LonBox.Text = lonText;
 
-            string latText = LatBox.Text.Trim().Replace(',', '.');
-            string lonText = LonBox.Text.Trim().Replace(',', '.');
-
-            string altText = altitudLbl.Text.Trim().Replace(',', '.');
-
-            if (!double.TryParse(latText, System.Globalization.NumberStyles.Float, ci, out lat) ||
-                !double.TryParse(lonText, System.Globalization.NumberStyles.Float, ci, out lon))
+            double alt;
+            if (altitudeBox.Text.Length > 0)
             {
-                MessageBox.Show("Latitud o longitud no válidas.\nUsa punto o coma como separador decimal.",
-                                "Goto — coordenadas", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return false;
+            alt = Convert.ToDouble(altitudeBox.Text);
+            }
+            else
+            {
+            alt = Convert.ToDouble(altitudLbl.Text);
             }
 
-            if (!double.TryParse(altText, System.Globalization.NumberStyles.Float, ci, out alt)
-                || alt < 0.5)
+            // Nuevo if solicitado: si alt > 0.5 preguntar confirmación
+            if (alt < 0.5)
             {
-                MessageBox.Show("Altitud no válida. Introduce un número ≥ 0.5 m.",
-                                "Goto — altitud", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                altitudeBox.Text = "5.0";   // restaurar valor seguro
-                return false;
+                var dr = MessageBox.Show("¿estas seguro?", "Confirmación", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (dr != DialogResult.Yes)
+                {
+                    // El usuario no confirmó, cancelar la operación
+                    return false;
+                }
             }
 
-            return true;
-        }
-
-        private void SendGoto(double lat, double lon, double alt)
-        {
             string payload;
-            if (_speedManualOverride)
-            {
-                // Incluir la velocidad en el mismo mensaje para que el autopilot
-                // aplique changeNavSpeed atómicamente antes del goto
+
                 payload = JsonConvert.SerializeObject(new
                 {
                     lat,
                     lon,
-                    alt,
-                    speed = velocidadTrackBar.Value
+                    alt
                 });
-                System.Diagnostics.Debug.WriteLine(
-                    $"[MAP] goto → {lat:0.00000000}, {lon:0.00000000}, {alt:0.0} m @ {velocidadTrackBar.Value} m/s");
-            }
-            else
-            {
-                payload = JsonConvert.SerializeObject(new { lat, lon, alt });
-                System.Diagnostics.Debug.WriteLine(
-                    $"[MAP] goto → {lat:0.00000000}, {lon:0.00000000}, {alt:0.0} m");
-            }
+
+            MessageBox.Show(payload);
             Publish(CmdTopic("goto"), payload);
+
+
+
+            return true;
         }
+
+        
 
         // ═════════════════════════════════════════════════════════════════
         //  TELEMETRÍA
@@ -646,11 +567,6 @@ namespace Formulario
                 latitudLbl.Text = lat.ToString("0.00000000");
                 longitudLbl.Text = lon.ToString("0.00000000");
                 headLbl.Text = heading.ToString("0.00");
-
-                // Sincronizar altitudeBox con la altitud real del dron,
-                // pero solo si el operador no está editando el campo en este momento.
-                if (!altitudeBox.Focused && alt > 0.0)
-                    altitudeBox.Text = alt.ToString("0.0");
 
 
 
