@@ -37,6 +37,32 @@
             min-height: 100vh;
         }
 
+        /* ── Banner de permisos ───────────────────────────────────────────── */
+        #permBanner {
+            display: none;
+            align-items: center;
+            gap: 12px;
+            background: linear-gradient(90deg, #1a3256, #17253f);
+            border: 1px solid var(--warn);
+            border-radius: 12px;
+            padding: 12px 16px;
+            margin-bottom: 12px;
+            font-size: 0.92rem;
+            color: var(--warn);
+        }
+        #permBanner.visible { display: flex; }
+        #permBanner button {
+            margin-left: auto;
+            background: var(--warn);
+            color: #000;
+            border: none;
+            border-radius: 8px;
+            padding: 7px 14px;
+            font-weight: 700;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
         .shell {
             max-width: 1150px;
             margin: 0 auto;
@@ -256,10 +282,17 @@
 </head>
 <body>
     <div class="shell">
+
+        <!-- Banner de permisos: se muestra si el navegador bloquea micrófono/cámara -->
+        <div id="permBanner">
+            <span id="permMsg">🎤 El navegador necesita permiso para acceder al micrófono (y cámara).</span>
+            <button id="permBtn">Conceder permisos</button>
+        </div>
+
         <div class="header">
             <h1 class="title">Centro de control del dron</h1>
             <div class="status-row">
-                <span id="mqttStatus" class="pill">Gateway HTTP: conectando</span>
+                <span id="mqttStatus" class="pill">Gateway HTTPS: conectando</span>
                 <span id="camStatus" class="pill">WebRTC: sin conectar</span>
                 <span id="stateStatus" class="pill">Estado dron: -</span>
             </div>
@@ -381,8 +414,8 @@
     </div>
 
     <script>
-        // ── El navegador habla con el gateway Flask por HTTP.
-        // ── La señalización WebRTC también va por HTTP (el gateway hace de relay MQTT).
+        // ── El navegador habla con el gateway Flask por HTTPS.
+        // ── La señalización WebRTC también va por HTTPS (el gateway hace de relay MQTT).
         // ── No conectamos a HiveMQ directamente desde el navegador.
 
         const voiceLog    = document.getElementById("voiceLog");
@@ -429,6 +462,77 @@
         const pathCoords = [];
 
         // ══════════════════════════════════════════════════
+        //  Permisos de micrófono / cámara
+        //  Requeridos en HTTPS para SpeechRecognition y WebRTC
+        // ══════════════════════════════════════════════════
+        const permBanner = document.getElementById("permBanner");
+        const permMsg    = document.getElementById("permMsg");
+        const permBtn    = document.getElementById("permBtn");
+
+        async function checkMediaPermissions() {
+            // Si el navegador no soporta la API de permisos, mostramos el banner
+            // directamente para que el usuario conceda acceso manualmente.
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                return; // navegador sin soporte (no hay nada que hacer)
+            }
+
+            try {
+                // Consultamos el estado actual SIN pedir permiso aún
+                if (navigator.permissions) {
+                    const micPerm = await navigator.permissions.query({ name: "microphone" });
+                    if (micPerm.state === "denied") {
+                        permMsg.textContent = "🎤 Micrófono bloqueado. Actívalo en los permisos del navegador (icono 🔒 en la barra de dirección).";
+                        permBanner.classList.add("visible");
+                        permBtn.style.display = "none";
+                        return;
+                    }
+                    if (micPerm.state === "prompt") {
+                        // Todavía no preguntó → mostramos banner para que el usuario pulse
+                        permBanner.classList.add("visible");
+                    }
+                    // Si es "granted" ocultamos el banner
+                    micPerm.onchange = () => {
+                        if (micPerm.state === "granted") permBanner.classList.remove("visible");
+                        if (micPerm.state === "denied") {
+                            permMsg.textContent = "🎤 Micrófono bloqueado. Actívalo en los permisos del navegador.";
+                            permBtn.style.display = "none";
+                        }
+                    };
+                } else {
+                    // No hay Permissions API (p.ej. Safari antiguo): mostramos banner de todos modos
+                    permBanner.classList.add("visible");
+                }
+            } catch (_) {
+                permBanner.classList.add("visible");
+            }
+        }
+
+        permBtn.addEventListener("click", async () => {
+            try {
+                // Pedir micrófono (y opcionalmente cámara si está disponible)
+                const constraints = { audio: true };
+                // Intentamos también la cámara; si no hay, no pasa nada
+                try {
+                    const devices = await navigator.mediaDevices.enumerateDevices();
+                    const hasVideo = devices.some(d => d.kind === "videoinput");
+                    if (hasVideo) constraints.video = true;
+                } catch (_) {}
+
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                // Paramos las pistas de inmediato; solo queríamos el permiso
+                stream.getTracks().forEach(t => t.stop());
+                permBanner.classList.remove("visible");
+                setLog(voiceLog, "Permisos de micrófono concedidos. Puedes activar la voz.");
+            } catch (err) {
+                permMsg.textContent = `🎤 Permiso denegado: ${err.message}. Actívalo en el icono 🔒 de la barra de dirección.`;
+                permBtn.style.display = "none";
+            }
+        });
+
+        // Comprobar permisos al arrancar
+        checkMediaPermissions();
+
+        // ══════════════════════════════════════════════════
         //  HTTP helpers
         // ══════════════════════════════════════════════════
         async function postApi(path, body = {}) {
@@ -451,7 +555,7 @@
         }
 
         // ══════════════════════════════════════════════════
-        //  WebRTC — señalización a través del gateway HTTP
+        //  WebRTC — señalización a través del gateway HTTPS
         // ══════════════════════════════════════════════════
         function setLog(el, text) { el.textContent = text; }
 
@@ -707,8 +811,16 @@
                 executeVoiceCommand(last);
             };
 
-            recognition.onerror = (event) => setLog(voiceLog, `Error voz: ${event.error}`);
-            recognition.onend   = () => { if (voiceActive) recognition.start(); };
+            recognition.onerror = (event) => {
+                setLog(voiceLog, `Error voz: ${event.error}`);
+                // Si el error es "not-allowed", el permiso fue denegado → mostrar banner
+                if (event.error === "not-allowed") {
+                    permMsg.textContent = "🎤 Micrófono bloqueado. Actívalo en el icono 🔒 de la barra de dirección.";
+                    permBtn.style.display = "none";
+                    permBanner.classList.add("visible");
+                }
+            };
+            recognition.onend = () => { if (voiceActive) recognition.start(); };
         }
 
         function commandFromText(text) {
