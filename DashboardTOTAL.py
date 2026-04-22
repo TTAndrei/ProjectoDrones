@@ -13,6 +13,7 @@
 
 import asyncio, json, ssl, threading, time, requests, sys
 import logging, warnings
+from datetime import datetime, timedelta
 
 # Silenciar FutureWarning de torch en YOLOv5
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -49,25 +50,9 @@ HIVEMQ_USERS = [
 USER_AUTOPILOT = "autopilotServiceDemo"
 PASS_AUTOPILOT = "qkdb!LasqvHfy9V"
 
-# Topics de señalización WebRTC — arquitectura R8 fan-out
-#
-# Solicitud de stream (cliente → CameraService):
-#   Topic fijo:  webrtc/request
-#   Payload:     MY_ORIGIN  (identifica al cliente)
-#   retain=True  para que el CameraService la reciba aunque arranque después
-#
-# Oferta (CameraService → cliente específico):
-#   Topic:  webrtc/offer/<origen>   (un topic diferente por cliente)
-#   retain=True  para que el cliente la reciba aunque haya un pequeño retraso
-#
-# Answer (cliente → CameraService):
-#   Topic:  webrtc/answer/<origen>
-#
-# Al usar un topic fijo para la solicitud evitamos los wildcards (+) que
-# algunos brokers HiveMQ Cloud restringen en el plan gratuito.
-T_CAM_REQUEST = "webrtc/request"   # topic fijo; origen va en el payload
-T_CAM_OFFER   = "webrtc/offer"     # sufijo /<origen> añadido al enviar/suscribir
-T_CAM_ANSWER  = "webrtc/answer"    # sufijo /<origen> añadido al enviar/suscribir
+T_CAM_REQUEST = "webrtc/request"
+T_CAM_OFFER   = "webrtc/offer"
+T_CAM_ANSWER  = "webrtc/answer"
 
 T_OFFER  = T_CAM_OFFER
 T_ANSWER = T_CAM_ANSWER
@@ -76,6 +61,70 @@ T_SLOT_PREFIX = "slot/ocupado/"
 
 TCP_HOST = "localhost"
 TCP_PORT = 9999
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  BALIZAS V16 — API DGT
+# ══════════════════════════════════════════════════════════════════════════════
+
+V16_API_URL = "https://baliza.app/api/dgt"
+V16_HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/json",
+    "Referer": "https://baliza.app/",
+    "Origin": "https://baliza.app"
+}
+
+
+def _extraer_lista_v16(data):
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for v in data.values():
+            if isinstance(v, list):
+                return v
+    return []
+
+
+def get_v16_activas():
+    """Consulta la API DGT y devuelve lista de balizas V16 con coordenadas."""
+    try:
+        r = requests.get(V16_API_URL, headers=V16_HEADERS, timeout=10)
+        items = _extraer_lista_v16(r.json())
+        v16 = []
+        for item in items:
+            if "v16" not in str(item).lower():
+                continue
+            lat = (item.get("lat") or item.get("latitude") or item.get("latitud")
+                   or (item.get("position") or {}).get("lat"))
+            lon = (item.get("lng") or item.get("lon") or item.get("longitude")
+                   or (item.get("position") or {}).get("lng"))
+            if lat and lon:
+                timestamp_str = (item.get("date") or item.get("timestamp")
+                                 or item.get("fecha") or item.get("updated_at"))
+                dt = None
+                if timestamp_str:
+                    try:
+                        if isinstance(timestamp_str, str):
+                            try:
+                                dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                            except ValueError:
+                                dt = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                        elif isinstance(timestamp_str, (int, float)):
+                            dt = datetime.fromtimestamp(timestamp_str)
+                    except Exception:
+                        pass
+                if dt and datetime.now() - dt <= timedelta(minutes=10):
+                    v16.append({
+                        "lat": float(lat),
+                        "lon": float(lon),
+                        "raw": item,
+                        "timestamp": timestamp_str
+                    })
+        return v16
+    except Exception as e:
+        print(f"[V16] Error obteniendo balizas: {e}")
+        return []
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SELECCIÓN AUTOMÁTICA DE SLOT HIVEMQ
@@ -218,7 +267,6 @@ AUTOPILOT_SOURCE_ID = f"DashboardTOTAL_autopilot_{_INST_SUFFIX}"
 pc               = None
 loop_dashboard   = None
 client_dashboard = None
-# pending_offer eliminado (R8: cada cliente usa su propio topic de oferta)
 previousBtn      = None
 MODE             = None
 REAL_DRONE       = False
@@ -332,14 +380,14 @@ drone_lon       = None
 drone_icon      = None
 _goto_callback  = None
 
+# Balizas V16
+v16_markers     = []   # lista de marcadores de balizas V16 en el mapa
+v16_updating    = True
+
 # ── YOLOv5 — detección multi-clase ───────────────────────────────────────────
-# detect_object_ids: set de class IDs COCO activos simultáneamente.
-# Vacío = sin detección.  Cada checkbox añade/quita un ID.
 detect_object_ids = set()
 yolo_model        = None
 
-# Clases COCO expuestas en la UI, agrupadas por categoría.
-# Formato: (nombre_display, class_id_coco)
 COCO_GRUPOS = [
     ("Personas",    [("Persona",   0)]),
     ("Vehículos",   [("Bicicleta", 1), ("Coche",    2), ("Moto",     3),
@@ -354,19 +402,14 @@ COCO_GRUPOS = [
 ]
 
 # ── Estado del CameraService ──────────────────────────────────────────────────
-# R8: el CameraService mantiene UNA CameraTrack (captura) y N RTCPeerConnections,
-# una por cada cliente que haya solicitado el stream.
-camera_service_loop    = None          # asyncio loop del hilo del CameraService
-camera_service_client  = None          # cliente MQTT del CameraService
-camera_service_mode    = None          # "global" | "local"
+camera_service_loop    = None
+camera_service_client  = None
+camera_service_mode    = None
 camera_service_running = False
 camera_stop_event      = threading.Event()
-# dict  origen → RTCPeerConnection  (una entrada por cliente conectado)
 _cam_peers: dict = {}
-# La instancia única de CameraTrack compartida por todos los peers
 _cam_track = None
-# Alias legacy para stop_camera_service (antes apuntaba a una sola PC)
-camera_service_pc = None   # obsoleto, se mantiene para compatibilidad
+camera_service_pc = None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -577,14 +620,9 @@ def mostrar_dialogo_rol(es_estacion):
 
 client_autopilot = None
 
-# ── Telemetría multi-cliente ───────────────────────────────────────────────────
-# Diccionario  origin → "autopilotServiceDemo/<origin>"
-# Un cliente se añade con startTelemetry y se elimina con stopTelemetry.
-# En cada tick dronLink publica a TODOS los suscriptores simultáneamente,
-# de modo que N instancias del dashboard reciben telemetría sin interferirse.
-_telem_subscribers: dict = {}          # origin → sending_topic
-_telem_lock = threading.Lock()         # acceso thread-safe desde el hilo dronLink
-_telem_active = False                  # True si dronLink está enviando telemetría
+_telem_subscribers: dict = {}
+_telem_lock = threading.Lock()
+_telem_active = False
 
 
 def _autopilot_topic(origin: str) -> str:
@@ -592,9 +630,6 @@ def _autopilot_topic(origin: str) -> str:
 
 
 def autopilot_publish_event(event, origin: str = None):
-    """Publica un evento de estado al cliente que lo originó.
-    Si origin es None se usa el primer suscriptor conocido (compatibilidad).
-    """
     if origin is None:
         with _telem_lock:
             origin = next(iter(_telem_subscribers), None)
@@ -609,15 +644,7 @@ def autopilot_publish_event(event, origin: str = None):
 
 
 def autopilot_publish_telemetry(telemetry_info):
-    """Publica telemetría a TODOS los clientes suscritos.
-
-    Se llama desde el hilo interno de dronLink (_send_telemetry_info).
-    Usa try/except por cada suscriptor para que un error de red en uno
-    no interrumpa la entrega al resto ni haga crashear el hilo de dronLink.
-    Si client_autopilot está en medio de una reconexión (None o desconectado)
-    simplemente descarta el tick y continúa.
-    """
-    cli = client_autopilot          # captura local — puede ser None durante reconnect
+    cli = client_autopilot
     if cli is None:
         return
     if not isinstance(telemetry_info, dict):
@@ -635,12 +662,10 @@ def autopilot_publish_telemetry(telemetry_info):
         try:
             cli.publish(base_topic + '/telemetryInfo', payload)
         except Exception as e:
-            # No re-lanzar: el hilo dronLink no debe morir por un error MQTT puntual
             print(f"[AUTOPILOT] Error telemetría → {base_topic}: {type(e).__name__}")
 
 
 def _start_telem_if_needed():
-    """Arranca el hilo de telemetría de dronLink si aún no está activo."""
     global _telem_active
     if not _telem_active:
         dron.send_telemetry_info(autopilot_publish_telemetry)
@@ -649,7 +674,6 @@ def _start_telem_if_needed():
 
 
 def _stop_telem_if_empty():
-    """Detiene el hilo de telemetría si ya no hay suscriptores."""
     global _telem_active
     if _telem_active and not _telem_subscribers:
         dron.stop_sending_telemetry_info()
@@ -744,18 +768,9 @@ def autopilot_on_connect(cli, userdata, flags, rc):
 
 
 def start_autopilot_service():
-    """Arranca el AutopilotService con reconexión automática ante caídas SSL/red.
-
-    HiveMQ Cloud puede cerrar conexiones inactivas o tras un timeout SSL.
-    loop_forever(retry_first_connection=True) reintenta la conexión inicial,
-    pero no cubre caídas posteriores. Por eso usamos un bucle externo que
-    recrea el cliente MQTT completo tras cualquier excepción, con backoff
-    exponencial (1 s, 2 s, 4 s … hasta 30 s máximo).
-    """
     global client_autopilot
 
     def _build_client():
-        """Crea y configura un cliente MQTT nuevo para el AutopilotService."""
         c = mqtt.Client("autopilotServiceDemo", transport="websockets")
         c.ws_set_options(path="/mqtt")
         c.tls_set(cert_reqs=mqtt.ssl.CERT_REQUIRED,
@@ -777,13 +792,10 @@ def start_autopilot_service():
         while True:
             try:
                 client_autopilot = _build_client()
-                # keepalive=30 s: mantiene viva la conexión SSL enviando pings
                 client_autopilot.connect(BROKER_DASHBOARD, PORT, keepalive=30)
                 client_autopilot.subscribe('+/autopilotServiceDemo/#')
                 print("[AUTOPILOT] Servicio listo — esperando comandos")
-                backoff = 1   # reset al conectar con éxito
-                # loop_forever gestiona el reconnect interno de paho,
-                # pero ante SSLEOFError lanza excepción y salimos al except.
+                backoff = 1
                 client_autopilot.loop_forever()
             except Exception as e:
                 print(f"[AUTOPILOT] Error de conexión: {e} — reintentando en {backoff} s...")
@@ -808,7 +820,7 @@ class CameraTrack(VideoStreamTrack):
         self._fractions = fractions
         self.cap = cv2.VideoCapture(0)
         self.frame_count = 0
-        self._last_boxes = []  # caché entre inferencias
+        self._last_boxes = []
         if not self.cap.isOpened():
             raise RuntimeError("No se pudo abrir la cámara")
         print("[CAM] Cámara abierta")
@@ -826,7 +838,6 @@ class CameraTrack(VideoStreamTrack):
             await asyncio.sleep(0.033)
             ret, frame = self.cap.read()
 
-        # Inferencia cada 30 frames sin bloquear el event loop
         if self.frame_count % 30 == 0 and detect_object_ids:
             self._last_boxes = await asyncio.get_event_loop().run_in_executor(
                 None, run_detect, frame.copy()
@@ -834,7 +845,6 @@ class CameraTrack(VideoStreamTrack):
         elif not detect_object_ids:
             self._last_boxes = []
 
-        # Dibujar boxes
         for (x1, y1, x2, y2, label) in self._last_boxes:
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(frame, label, (x1, max(y1 - 8, 0)),
@@ -886,15 +896,6 @@ def _silence_aioice_handler(loop, context):
 
 
 async def _cam_connect_peer(origen: str, mqtt_cam_client):
-    """Crea una RTCPeerConnection para el cliente `origen`, negocia la oferta
-    por topics individuales y mantiene la conexión viva.
-
-    Protocolo:
-      1. CameraService crea una RTCPeerConnection, añade la CameraTrack compartida.
-      2. Genera una oferta y la publica en  webrtc/offer/<origen>  (retain=True).
-      3. Espera la answer del cliente en  webrtc/answer/<origen>.
-      4. Mantiene la conexión hasta que el cliente se desconecte o se solicite parada.
-    """
     global _cam_peers, _cam_track
 
     print(f"[CAM] Nueva conexión para cliente: {origen}")
@@ -902,7 +903,6 @@ async def _cam_connect_peer(origen: str, mqtt_cam_client):
     pc_peer = RTCPeerConnection(configuration=get_ice_config())
     _cam_peers[origen] = pc_peer
 
-    # Compartir la misma CameraTrack en todos los peers
     pc_peer.addTrack(_cam_track)
 
     @pc_peer.on("connectionstatechange")
@@ -917,7 +917,6 @@ async def _cam_connect_peer(origen: str, mqtt_cam_client):
     t_offer_peer  = f"{T_CAM_OFFER}/{origen}"
     t_answer_peer = f"{T_CAM_ANSWER}/{origen}"
 
-    # Escuchar la answer de este cliente concreto
     def _on_mqtt(cli, userdata, msg):
         if msg.topic == t_answer_peer:
             try:
@@ -932,7 +931,6 @@ async def _cam_connect_peer(origen: str, mqtt_cam_client):
     mqtt_cam_client.message_callback_add(t_answer_peer, _on_mqtt)
     mqtt_cam_client.subscribe(t_answer_peer)
 
-    # Crear oferta
     await pc_peer.setLocalDescription(await pc_peer.createOffer())
     print(f"[CAM:{origen}] Esperando ICE gathering...")
     while pc_peer.iceGatheringState != "complete":
@@ -944,15 +942,12 @@ async def _cam_connect_peer(origen: str, mqtt_cam_client):
     print(f"[CAM:{origen}] {len(candidates)} candidates — "
           f"{'✓ relay' if has_relay else '⚠ sin relay'}")
 
-    # Publicar oferta con retain=True para que el cliente la reciba aunque
-    # se conecte después de que el CameraService la haya publicado
     mqtt_cam_client.publish(t_offer_peer, json.dumps({
         "sdp":  pc_peer.localDescription.sdp,
         "type": pc_peer.localDescription.type,
     }), retain=True)
     print(f"[CAM:{origen}] Oferta publicada → {t_offer_peer}")
 
-    # Esperar answer
     try:
         await asyncio.wait_for(answer_event.wait(), timeout=30.0)
         print(f"[CAM:{origen}] Conexión establecida ✓")
@@ -962,7 +957,6 @@ async def _cam_connect_peer(origen: str, mqtt_cam_client):
         await pc_peer.close()
         return
 
-    # Mantener viva hasta desconexión o parada global
     while (not camera_stop_event.is_set()
            and pc_peer.connectionState not in ("failed", "closed", "disconnected")):
         await asyncio.sleep(1)
@@ -976,7 +970,6 @@ async def _cam_connect_peer(origen: str, mqtt_cam_client):
 
 
 async def _apply_answer_peer(pc_peer, data, event):
-    """Aplica la answer de un cliente a su RTCPeerConnection."""
     try:
         await pc_peer.setRemoteDescription(
             RTCSessionDescription(sdp=data["sdp"], type=data["type"])
@@ -988,13 +981,6 @@ async def _apply_answer_peer(pc_peer, data, event):
 
 
 async def run_camera_global(mqtt_cam_client):
-    """Bucle principal del CameraService en modo global.
-
-    - Abre la cámara UNA SOLA VEZ (CameraTrack compartida).
-    - Escucha solicitudes de clientes en  webrtc/request/+
-    - Por cada solicitud lanza _cam_connect_peer() en una tarea asyncio independiente.
-    - Permite N clientes simultáneos sin ningún límite adicional.
-    """
     global camera_service_loop, camera_service_client, camera_service_running
     global _cam_track, _cam_peers
 
@@ -1003,15 +989,11 @@ async def run_camera_global(mqtt_cam_client):
     camera_service_running = True
     _cam_peers = {}
 
-    # Instanciar la cámara UNA sola vez para todos los clientes
     _cam_track = CameraTrack()
     print("[CAM] Cámara abierta — esperando solicitudes de clientes...")
 
     cam_loop = asyncio.get_event_loop()
     def _on_request(cli, userdata, msg):
-        """Callback MQTT: llega cuando un cliente publica en webrtc/request.
-        El payload contiene el MY_ORIGIN del cliente que pide stream.
-        """
         try:
             origen = msg.payload.decode("utf-8").strip()
         except Exception:
@@ -1028,7 +1010,6 @@ async def run_camera_global(mqtt_cam_client):
         )
 
     def _on_detect_classes(cli, userdata, msg):
-        """Recibe [0,2,15] desde el dashboard C# y actualiza detect_object_ids."""
         try:
             payload = msg.payload.decode("utf-8").strip()
             if not payload:
@@ -1045,7 +1026,6 @@ async def run_camera_global(mqtt_cam_client):
             print(f"[COCO] Error parseando detectClasses: {e}")
 
     mqtt_cam_client.message_callback_add("webrtc/detectClasses", _on_detect_classes)
-
 
     mqtt_cam_client.message_callback_add(T_CAM_REQUEST, _on_request)
     mqtt_cam_client.subscribe(T_CAM_REQUEST)
@@ -1072,7 +1052,6 @@ async def run_camera_global(mqtt_cam_client):
     except asyncio.CancelledError:
         pass
     finally:
-        # Cerrar todos los peers activos
         print(f"[CAM] Cerrando {len(_cam_peers)} peer(s)...")
         close_tasks = [pc.close() for pc in list(_cam_peers.values())]
         if close_tasks:
@@ -1209,7 +1188,6 @@ def start_camera_service_local():
 
 
 def stop_camera_service():
-    """Detiene el CameraService y libera cámara + todos los PeerConnections."""
     global camera_service_running
 
     if not camera_service_running and not _cam_peers and _cam_track is None:
@@ -1219,7 +1197,6 @@ def stop_camera_service():
     print(f"[CAM] Solicitud de parada ({len(_cam_peers)} peer(s) activos)...")
     camera_stop_event.set()
 
-    # Cerrar todos los peers desde el loop asíncrono del CameraService
     loop = camera_service_loop
     if loop is not None:
         async def _close_all():
@@ -1247,7 +1224,6 @@ def stop_camera_service():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def load_yolo():
-    """Carga YOLOv5s en segundo plano (solo la primera vez que se necesita)."""
     global yolo_model
     if yolo_model is None:
         print("[DET] Cargando YOLOv5s...")
@@ -1258,11 +1234,6 @@ def load_yolo():
 
 
 def toggle_detect(obj_id: int, active: bool):
-    """Activa o desactiva una clase COCO en el conjunto de detección.
-
-    Si se activa la primera clase y el modelo no está cargado,
-    lo arranca en un hilo para no bloquear la UI.
-    """
     if active:
         detect_object_ids.add(obj_id)
         if yolo_model is None:
@@ -1274,14 +1245,9 @@ def toggle_detect(obj_id: int, active: bool):
 
 
 def run_detect(frame):
-    """Ejecuta inferencia sobre un frame BGR y devuelve lista de
-    (x1, y1, x2, y2, nombre_clase) para todas las clases activas.
-    Devuelve [] si no hay clases seleccionadas o el modelo no cargó.
-    """
     if yolo_model is None or not detect_object_ids:
         return []
 
-    # Mapa id→nombre para la etiqueta visual en el vídeo
     id_to_name = {
         oid: nombre
         for _, clases in COCO_GRUPOS
@@ -1325,16 +1291,6 @@ async def show_video(track):
 
 
 def webrtc_thread_dashboard():
-    """Hilo receptor de vídeo del dashboard en modo global.
-
-    Protocolo R8 — fan-out desde un único CameraService centralizado:
-      1. Publica MY_ORIGIN en  webrtc/request/<MY_ORIGIN>  para solicitar su stream.
-      2. Suscribe a  webrtc/offer/<MY_ORIGIN>  donde el CameraService enviará
-         una RTCPeerConnection dedicada a este cliente.
-      3. Responde con su answer en  webrtc/answer/<MY_ORIGIN>.
-    Cada instancia del dashboard recibe el mismo stream del dron sin
-    interferir con las demás.
-    """
     global pc, loop_dashboard
 
     loop_dashboard = asyncio.new_event_loop()
@@ -1355,12 +1311,9 @@ def webrtc_thread_dashboard():
     @pc.on("iceconnectionstatechange")
     async def _(): print(f"[ICE] {pc.iceConnectionState}")
 
-    # Topics individuales de esta instancia
-    # - Solicitud: topic FIJO webrtc/request, origen en el payload
-    # - Oferta/Answer: topic por instancia  webrtc/offer/<origen> | webrtc/answer/<origen>
     t_my_offer   = f"{T_CAM_OFFER}/{MY_ORIGIN}"
     t_my_answer  = f"{T_CAM_ANSWER}/{MY_ORIGIN}"
-    t_my_request = T_CAM_REQUEST          # topic fijo; payload = MY_ORIGIN
+    t_my_request = T_CAM_REQUEST
 
     def _on_offer(cli, userdata, msg):
         if msg.topic == t_my_offer and msg.payload:
@@ -1372,18 +1325,14 @@ def webrtc_thread_dashboard():
             asyncio.run_coroutine_threadsafe(
                 handle_offer_dashboard(data, t_my_answer), loop_dashboard)
 
-    # Callback específico para el topic de oferta de esta instancia
     client_dashboard.message_callback_add(t_my_offer, _on_offer)
     client_dashboard.subscribe(t_my_offer)
 
-    # Anunciarse al CameraService con retain=True para que la reciba aunque
-    # arranque un poco después.
     client_dashboard.publish(t_my_request, MY_ORIGIN, retain=True)
     print(f"[WebRTC] Solicitud enviada a {t_my_request} (payload={MY_ORIGIN})")
 
-    # Reenviar cada 5 s hasta tener vídeo (por si el CameraService tardó en suscribirse)
     async def _retry_request():
-        for _ in range(12):   # hasta 60 s
+        for _ in range(12):
             await asyncio.sleep(5)
             if pc.connectionState in ("connected", "connecting"):
                 break
@@ -1478,7 +1427,6 @@ def webrtc_thread_dashboard_local():
 
 
 async def handle_offer_dashboard(data, t_answer: str):
-    """Aplica la oferta del CameraService y envía la answer por el topic correcto."""
     await pc.setRemoteDescription(
         RTCSessionDescription(sdp=data["sdp"], type=data["type"])
     )
@@ -1678,6 +1626,72 @@ def goto_gps_local(lat, lon):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  BALIZAS V16 — CARGA Y DIBUJO EN EL MAPA
+# ══════════════════════════════════════════════════════════════════════════════
+
+def load_v16_markers():
+    """Obtiene balizas V16 de la API DGT y las pinta en el mapa tkintermapview."""
+    global v16_markers, v16_updating
+
+    v16_updating = True
+
+    def _run():
+        print("[V16] Consultando API DGT...")
+        balizas = get_v16_activas()
+        print(f"[V16] {len(balizas)} baliza(s) V16 encontradas")
+
+        def _draw():
+            global v16_markers
+            # Eliminar marcadores anteriores
+            for m in v16_markers:
+                try:
+                    m.delete()
+                except Exception:
+                    pass
+            v16_markers = []
+
+            for b in balizas:
+                # Construir texto de detalle para el tooltip/texto del marcador
+                detalles = []
+                for k, v in b["raw"].items():
+                    if not isinstance(v, dict) and k not in ("lat", "lon", "lng",
+                                                              "latitude", "longitude"):
+                        detalles.append(f"{k}: {v}")
+                detalle_txt = " | ".join(detalles[:4])   # máximo 4 campos en el label
+
+                m = map_widget.set_marker(
+                    b["lat"], b["lon"],
+                    text=f"⚠ V16",
+                    marker_color_circle="#f57c00",
+                    marker_color_outside="#e65100",
+                    font=("Arial", 7, "bold"),
+                )
+                v16_markers.append(m)
+
+            print(f"[V16] {len(v16_markers)} marcador(es) dibujados en el mapa")
+            if not v16_markers:
+                print("[V16] Sin balizas activas en este momento")
+
+        if map_widget:
+            map_widget.after(0, _draw)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def clear_v16_markers():
+    """Elimina todos los marcadores V16 del mapa."""
+    global v16_markers, v16_updating
+    v16_updating = False
+    for m in v16_markers:
+        try:
+            m.delete()
+        except Exception:
+            pass
+    v16_markers = []
+    print("[V16] Marcadores eliminados del mapa")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  CONTROL DEL DRON
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1835,13 +1849,6 @@ def changeNavSpeed_local(e): dron.changeNavSpeed(float(speedSldr.get()))
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _build_detection_panel(parent):
-    """Panel con checkboxes multi-clase organizados por categoría COCO.
-
-    - 25 clases en 6 grupos temáticos.
-    - Selección simultánea ilimitada: cada checkbox llama a toggle_detect().
-    - Canvas + scrollbar vertical para no desbordar el panel lateral.
-    - Botón "Desactivar todas" para resetear el set de golpe.
-    """
     df = tk.LabelFrame(parent, text="Detección de objetos (multi-clase COCO)")
     df.grid(row=11, column=0, columnspan=2, padx=5, pady=3, sticky="nsew")
 
@@ -1862,11 +1869,10 @@ def _build_detection_panel(parent):
                 lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
 
     COLS = 5
-    checkbox_vars = {}   # obj_id → BooleanVar
+    checkbox_vars = {}
 
     row_idx = 0
     for grupo_nombre, clases in COCO_GRUPOS:
-        # Cabecera de grupo
         tk.Label(inner, text=grupo_nombre,
                  font=("Arial", 7, "bold"), fg="#555555"
                  ).grid(row=row_idx, column=0, columnspan=COLS,
@@ -1890,7 +1896,6 @@ def _build_detection_panel(parent):
 
         row_idx += (len(clases) + COLS - 1) // COLS
 
-    # Botón para desactivar todo de golpe
     def _clear_all():
         detect_object_ids.clear()
         for v in checkbox_vars.values():
@@ -1929,8 +1934,6 @@ def crear_ventana(modo):
         else:
             print("[MAIN] AutopilotService omitido (Cliente)")
 
-        # R8: el CameraService centralizado solo corre en la Estación de Tierra.
-        # Los clientes NO abren cámara — se conectan al stream de la EdT.
         if IS_GROUND_STATION:
             start_camera_service_global()
         else:
@@ -1949,10 +1952,8 @@ def crear_ventana(modo):
             print(f"[MQTT] Dashboard desconectado (rc={rc}) — paho reconectará automáticamente")
             if rc != 0 else None
         )
-        # keepalive=30 s para mantener la conexión SSL activa con HiveMQ Cloud
         client_dashboard.connect(BROKER_DASHBOARD, PORT, keepalive=30)
         client_dashboard.subscribe(f'autopilotServiceDemo/{MY_ORIGIN}/#')
-        # loop_start + reconnect_delay: paho reintentará la conexión si cae
         client_dashboard.reconnect_delay_set(min_delay=1, max_delay=30)
         client_dashboard.loop_start()
         _start_telemetry_watchdog_global()
@@ -2085,12 +2086,11 @@ def crear_ventana(modo):
 
     _goto_callback = goto_gps_global if modo == "global" else goto_gps_local
 
+    # ── Barra de controles del mapa (6 columnas) ──────────────────────────────
     map_ctrl = tk.Frame(map_frame)
     map_ctrl.grid(row=1, column=0, sticky="ew", pady=2)
-    map_ctrl.columnconfigure(0, weight=1)
-    map_ctrl.columnconfigure(1, weight=1)
-    map_ctrl.columnconfigure(2, weight=1)
-    map_ctrl.columnconfigure(3, weight=1)
+    for col in range(6):
+        map_ctrl.columnconfigure(col, weight=1)
 
     def center_on_drone():
         if drone_lat and drone_lon:
@@ -2105,13 +2105,28 @@ def crear_ventana(modo):
             drone_path_line = None
 
     tk.Button(map_ctrl, text="🎯 Centrar en dron", bg="dark orange",
-              command=center_on_drone).grid(row=0, column=0, padx=3, pady=3, sticky="ew")
-    tk.Button(map_ctrl, text="🗑 Borrar ruta",      bg="dark orange",
-              command=clear_path).grid(row=0, column=1, padx=3, pady=3, sticky="ew")
-    tk.Button(map_ctrl, text="🗺 OpenStreetMap",    bg="dark orange",
+              command=center_on_drone
+              ).grid(row=0, column=0, padx=3, pady=3, sticky="ew")
+
+    tk.Button(map_ctrl, text="🗑 Borrar ruta", bg="dark orange",
+              command=clear_path
+              ).grid(row=0, column=1, padx=3, pady=3, sticky="ew")
+
+    tk.Button(map_ctrl, text="🗺 OpenStreetMap", bg="dark orange",
               command=lambda: map_widget.set_tile_server(
                   "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png")
               ).grid(row=0, column=2, padx=3, pady=3, sticky="ew")
+
+    # ── Botones de balizas V16 ────────────────────────────────────────────────
+    tk.Button(map_ctrl, text="⚠ Balizas V16", bg="#f57c00", fg="white",
+              font=("Arial", 9, "bold"),
+              command=load_v16_markers
+              ).grid(row=0, column=3, padx=3, pady=3, sticky="ew")
+
+    tk.Button(map_ctrl, text="✕ Ocultar V16", bg="#b35c00", fg="white",
+              font=("Arial", 9),
+              command=clear_v16_markers
+              ).grid(row=0, column=4, padx=3, pady=3, sticky="ew")
 
     # ── Terminal integrada (desplegable) ──────────────────────────────────────
     term_frame = tk.LabelFrame(v, text="Terminal (feedback Python)")
@@ -2159,7 +2174,7 @@ def crear_ventana(modo):
 
     toggle_term_map_btn = tk.Button(map_ctrl, text="Terminal", bg="dark orange",
                                     command=toggle_terminal)
-    toggle_term_map_btn.grid(row=0, column=3, padx=3, pady=3, sticky="ew")
+    toggle_term_map_btn.grid(row=0, column=5, padx=3, pady=3, sticky="ew")
 
     tk.Button(term_header, text="Limpiar", bg="dark orange",
               command=lambda: (
@@ -2173,6 +2188,18 @@ def crear_ventana(modo):
     print("[UI] Terminal integrada lista")
 
     v.geometry("1100x860")
+
+    # ── Auto-refresco de balizas V16 cada 1 minuto ───────────────────────────
+    def _auto_refresh_v16():
+        global v16_updating
+        while True:
+            time.sleep(60)
+            if v16_updating and map_widget:
+                load_v16_markers()
+
+    threading.Thread(target=_auto_refresh_v16, daemon=True).start()
+    # Carga inicial al arrancar el dashboard
+    v.after(2000, load_v16_markers)
 
     # ── Liberar recursos al cerrar ────────────────────────────────────────────
     if modo == "global" and IS_GROUND_STATION:
