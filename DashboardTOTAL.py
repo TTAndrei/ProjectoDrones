@@ -1489,6 +1489,10 @@ def _auto_follow_from_detections(frame_shape, detections):
         distance_m = _estimate_distance_from_bbox(x1, y1, x2, y2, frame_shape)
         confidence = float(best.get("conf", 1.0))
         target_id = f"{best.get('label', 'obj')}:{best.get('cls_id', 'na')}"
+        print(
+            f"[FOLLOW] Distancia estimada={distance_m:.2f}m "
+            f"offset_x={offset_x:+.3f} conf={confidence:.2f} target={target_id}"
+        )
 
         if not _auto_follow_active:
             try:
