@@ -30,6 +30,7 @@ from aiortc import (RTCPeerConnection, RTCSessionDescription,
                     RTCConfiguration, RTCIceServer, VideoStreamTrack)
 from av import VideoFrame
 from dronLink.Dron import Dron
+from distance_follow_controller import DistanceFollowController
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  CONFIGURACIÓN
@@ -623,10 +624,88 @@ client_autopilot = None
 _telem_subscribers: dict = {}
 _telem_lock = threading.Lock()
 _telem_active = False
+_distance_follow = None
 
 
 def _autopilot_topic(origin: str) -> str:
     return f"autopilotServiceDemo/{origin}"
+
+
+def _parse_json_payload(payload_text: str) -> dict:
+    if not payload_text:
+        return {}
+    data = json.loads(payload_text)
+    if not isinstance(data, dict):
+        raise ValueError("Se esperaba un objeto JSON")
+    return data
+
+
+def _follow_set_nav_speed(speed, origin):
+    dron.changeNavSpeed(float(speed))
+
+
+def _follow_set_direction(direction, origin):
+    dron.go(direction)
+
+
+def _follow_stop_direction(origin):
+    dron.go("Stop")
+
+
+def _is_drone_flying() -> bool:
+    return dron.state == 'flying'
+
+
+def _autopilot_publish_status(message: str, origin: str = None, level: str = "info", **extra):
+    if origin is None:
+        with _telem_lock:
+            origin = next(iter(_telem_subscribers), None)
+    if origin is None:
+        return
+    payload = {
+        "timestamp": int(time.time()),
+        "level": level,
+        "message": message,
+        "drone_state": getattr(dron, "state", "unknown"),
+    }
+    payload.update(extra)
+    try:
+        client_autopilot.publish(_autopilot_topic(origin) + '/status', json.dumps(payload))
+    except Exception as e:
+        print(f"[AUTOPILOT] Error publicando status: {e}")
+
+
+def _autopilot_publish_error(message: str, origin: str = None, **extra):
+    if origin is None:
+        with _telem_lock:
+            origin = next(iter(_telem_subscribers), None)
+    if origin is None:
+        return
+    payload = {
+        "timestamp": int(time.time()),
+        "message": message,
+        "drone_state": getattr(dron, "state", "unknown"),
+    }
+    payload.update(extra)
+    try:
+        client_autopilot.publish(_autopilot_topic(origin) + '/error', json.dumps(payload))
+    except Exception as e:
+        print(f"[AUTOPILOT] Error publicando error: {e}")
+
+
+def _ensure_distance_follow_controller():
+    global _distance_follow
+    if _distance_follow is None:
+        _distance_follow = DistanceFollowController(
+            set_nav_speed=_follow_set_nav_speed,
+            set_direction=_follow_set_direction,
+            stop_direction=_follow_stop_direction,
+            is_flying=_is_drone_flying,
+            publish_status=_autopilot_publish_status,
+            publish_error=_autopilot_publish_error,
+            control_hz=8.0,
+        )
+    return _distance_follow
 
 
 def autopilot_publish_event(event, origin: str = None):
@@ -686,6 +765,7 @@ def autopilot_on_message(cli, userdata, message):
     origin  = parts[0]
     command = parts[2]
     sending_topic = _autopilot_topic(origin)
+    follow_controller = _ensure_distance_follow_controller()
 
     print(f"[AUTOPILOT] {origin} → {command}")
 
@@ -719,16 +799,22 @@ def autopilot_on_message(cli, userdata, message):
 
     elif command == 'go':
         if dron.state == 'flying':
+            if follow_controller.is_running():
+                follow_controller.stop(reason="manual-go", origin=origin)
             dron.go(message.payload.decode("utf-8"))
 
     elif command == 'Land':
         if dron.state == 'flying':
+            if follow_controller.is_running():
+                follow_controller.stop(reason="land", origin=origin)
             dron.Land(blocking=False,
                       callback=lambda ev: autopilot_publish_event(ev, origin),
                       params='landed')
 
     elif command == 'RTL':
         if dron.state == 'flying':
+            if follow_controller.is_running():
+                follow_controller.stop(reason="rtl", origin=origin)
             dron.RTL(blocking=False,
                      callback=lambda ev: autopilot_publish_event(ev, origin),
                      params='atHome')
@@ -751,7 +837,79 @@ def autopilot_on_message(cli, userdata, message):
         dron.changeHeading(float(message.payload.decode("utf-8")))
 
     elif command == 'changeNavSpeed':
+        if follow_controller.is_running():
+            follow_controller.stop(reason="manual-speed-change", origin=origin)
         dron.changeNavSpeed(float(message.payload.decode("utf-8")))
+
+    elif command == 'startDistanceFollow':
+        if dron.state != 'flying':
+            _autopilot_publish_error(
+                "No se puede activar seguimiento por distancia: dron no esta en vuelo",
+                origin=origin,
+                command=command,
+            )
+            return
+        payload_text = message.payload.decode("utf-8").strip() if message.payload else ""
+        try:
+            cfg = _parse_json_payload(payload_text)
+        except Exception as e:
+            _autopilot_publish_error(
+                f"Payload startDistanceFollow invalido: {e}",
+                origin=origin,
+                command=command,
+                payload=payload_text,
+            )
+            return
+        follow_controller.start(origin=origin, config=cfg)
+        _autopilot_publish_status(
+            "Seguimiento por distancia activado",
+            origin=origin,
+            mode="distance-follow",
+            config=follow_controller.snapshot_config(),
+        )
+
+    elif command == 'updateDistanceFollow':
+        if not follow_controller.is_running():
+            _autopilot_publish_status(
+                "updateDistanceFollow ignorado: seguimiento no activo",
+                origin=origin,
+                level="warning",
+                command=command,
+            )
+            return
+        payload_text = message.payload.decode("utf-8").strip() if message.payload else ""
+        try:
+            obs = _parse_json_payload(payload_text)
+        except Exception as e:
+            _autopilot_publish_error(
+                f"Payload updateDistanceFollow invalido: {e}",
+                origin=origin,
+                command=command,
+                payload=payload_text,
+            )
+            return
+        if not follow_controller.update_observation(obs):
+            _autopilot_publish_error(
+                "Observacion de seguimiento invalida",
+                origin=origin,
+                command=command,
+                payload=payload_text,
+            )
+
+    elif command == 'stopDistanceFollow':
+        payload_text = message.payload.decode("utf-8").strip() if message.payload else ""
+        reason = "stop-request"
+        try:
+            data = _parse_json_payload(payload_text)
+            reason = str(data.get("reason", reason))
+        except Exception:
+            pass
+        follow_controller.stop(reason=reason, origin=origin)
+        _autopilot_publish_status(
+            "Seguimiento por distancia detenido",
+            origin=origin,
+            reason=reason,
+        )
 
     elif command == 'changeAltitude':
         dron.change_altitude(float(message.payload.decode("utf-8")), blocking=False)
@@ -783,6 +941,12 @@ def start_autopilot_service():
         return c
 
     def _autopilot_on_disconnect(cli, userdata, rc):
+        try:
+            controller = _ensure_distance_follow_controller()
+            if controller.is_running():
+                controller.stop(reason="mqtt-disconnect")
+        except Exception:
+            pass
         if rc != 0:
             print(f"[AUTOPILOT] Desconexión inesperada (rc={rc}) — reconectando...")
 
@@ -1753,6 +1917,33 @@ def startTelem_global(): client_dashboard.publish(f'{MY_ORIGIN}/autopilotService
 def stopTelem_global():  client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/stopTelemetry')
 def changeHeading_global(e): client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/changeHeading', str(gradesSldr.get()))
 def changeNavSpeed_global(e): client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/changeNavSpeed', str(speedSldr.get()))
+
+
+def startDistanceFollow_global(config=None):
+    payload = json.dumps(config if isinstance(config, dict) else {})
+    client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/startDistanceFollow', payload)
+
+
+def updateDistanceFollow_global(distance_m, offset_x=0.0, confidence=1.0, valid=True, target_id=None):
+    payload_obj = {
+        "distance_m": float(distance_m),
+        "offset_x": float(offset_x),
+        "confidence": float(confidence),
+        "valid": bool(valid),
+    }
+    if target_id is not None:
+        payload_obj["target_id"] = str(target_id)
+    client_dashboard.publish(
+        f'{MY_ORIGIN}/autopilotServiceDemo/updateDistanceFollow',
+        json.dumps(payload_obj),
+    )
+
+
+def stopDistanceFollow_global(reason="manual"):
+    client_dashboard.publish(
+        f'{MY_ORIGIN}/autopilotServiceDemo/stopDistanceFollow',
+        json.dumps({"reason": str(reason)}),
+    )
 
 
 def _start_telemetry_watchdog_global():

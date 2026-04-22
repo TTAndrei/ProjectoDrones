@@ -68,3 +68,73 @@ Este apartado es muy similar al anterior, [DashboardLocalConDeteccion](Dashboard
 
 ##NEW
 [README_Dashboard.docx](https://github.com/user-attachments/files/25898996/README_Dashboard.docx)
+
+## Seguimiento por distancia (MQTT)
+
+Se ha añadido un control modular de seguimiento para mantener distancia estable con un objeto en movimiento (por ejemplo, un coche), reutilizando las funciones existentes de navegacion (`go`, `changeNavSpeed`, `Stop`).
+
+### Comandos nuevos
+
+Topic base (igual que el resto):
+
+```text
+<origin>/autopilotServiceDemo/<command>
+```
+
+1. `startDistanceFollow`
+
+Payload JSON opcional (si no se envia, usa valores por defecto):
+
+```json
+{
+	"target_distance": 8.0,
+	"distance_deadband": 0.5,
+	"lateral_deadband": 0.08,
+	"kp_distance": 0.8,
+	"kp_lateral": 0.9,
+	"min_speed": 0.4,
+	"max_speed": 3.0,
+	"lost_timeout": 0.9,
+	"max_offset_abs": 1.0
+}
+```
+
+2. `updateDistanceFollow`
+
+Payload JSON con la observacion del reconocedor/tracker:
+
+```json
+{
+	"distance_m": 7.6,
+	"offset_x": -0.12,
+	"confidence": 0.91,
+	"valid": true,
+	"target_id": "car-1"
+}
+```
+
+Notas:
+- `distance_m` en metros.
+- `offset_x` normalizado en rango aproximado `[-1, 1]` (izquierda negativo, derecha positivo).
+- si `valid=false` o no llegan updates dentro de `lost_timeout`, el controlador ordena `Stop` automaticamente.
+
+3. `stopDistanceFollow`
+
+Payload JSON opcional:
+
+```json
+{
+	"reason": "manual"
+}
+```
+
+### Eventos/status
+
+Se publican mensajes de estado en:
+
+```text
+autopilotServiceDemo/<origin>/status
+autopilotServiceDemo/<origin>/error
+```
+
+Incluyendo eventos como `distance_follow_started`, `distance_follow_target_lost` y `distance_follow_stopped`.

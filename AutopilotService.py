@@ -10,6 +10,7 @@ import time
 import paho.mqtt.client as mqtt
 
 from dronLink.Dron import Dron
+from distance_follow_controller import DistanceFollowController
 
 
 BROKER_ADDRESS = "554f19f1f4944c978dd30b509d24afc0.s1.eu.hivemq.cloud"
@@ -30,6 +31,7 @@ _last_publish_error_ts = 0.0
 _telem_subscribers = set()
 _telem_lock = threading.Lock()
 _telem_active = False
+distance_follow = None
 
 
 def _log_publish_error_throttled(topic, error_text, interval_seconds=5.0):
@@ -96,6 +98,46 @@ def publish_error(message, origin=None, **extra):
     safe_publish(f"{_topic_for_origin(target_origin)}/error", json.dumps(data))
 
 
+def _parse_json_payload(payload_text):
+    if not payload_text:
+        return {}
+    parsed = json.loads(payload_text)
+    if not isinstance(parsed, dict):
+        raise ValueError("Se esperaba un objeto JSON")
+    return parsed
+
+
+def _follow_set_nav_speed(speed, origin):
+    dron.changeNavSpeed(float(speed))
+
+
+def _follow_set_direction(direction, origin):
+    dron.go(direction)
+
+
+def _follow_stop_direction(origin):
+    dron.go("Stop")
+
+
+def _is_drone_flying():
+    return dron.state == "flying"
+
+
+def _ensure_follow_controller():
+    global distance_follow
+    if distance_follow is None:
+        distance_follow = DistanceFollowController(
+            set_nav_speed=_follow_set_nav_speed,
+            set_direction=_follow_set_direction,
+            stop_direction=_follow_stop_direction,
+            is_flying=_is_drone_flying,
+            publish_status=publish_status,
+            publish_error=publish_error,
+            control_hz=8.0,
+        )
+    return distance_follow
+
+
 def publish_telemetry_info(telemetry_info):
     if not isinstance(telemetry_info, dict):
         return
@@ -150,6 +192,7 @@ def _require_state(expected_state, command_name, origin):
 def handle_command(origin, command, payload_text):
     global current_origin
     current_origin = origin
+    follow_controller = _ensure_follow_controller()
 
     if command == "connect":
         if payload_text == "REAL":
@@ -188,6 +231,8 @@ def handle_command(origin, command, payload_text):
     if command == "go":
         if not _require_state("flying", command, origin):
             return
+        if follow_controller.is_running():
+            follow_controller.stop(reason="manual-go", origin=origin)
         direction = payload_text
         dron.go(direction)
         publish_status("Comando de movimiento enviado", origin=origin, direction=direction)
@@ -196,6 +241,8 @@ def handle_command(origin, command, payload_text):
     if command == "Land":
         if not _require_state("flying", command, origin):
             return
+        if follow_controller.is_running():
+            follow_controller.stop(reason="land", origin=origin)
         dron.Land(blocking=False, callback=publish_event, params="landed")
         publish_status("Aterrizaje iniciado", origin=origin)
         return
@@ -203,6 +250,8 @@ def handle_command(origin, command, payload_text):
     if command == "RTL":
         if not _require_state("flying", command, origin):
             return
+        if follow_controller.is_running():
+            follow_controller.stop(reason="rtl", origin=origin)
         dron.RTL(blocking=False, callback=publish_event, params="atHome")
         publish_status("RTL iniciado", origin=origin)
         return
@@ -232,9 +281,72 @@ def handle_command(origin, command, payload_text):
         return
 
     if command == "changeNavSpeed":
+        if follow_controller.is_running():
+            follow_controller.stop(reason="manual-speed-change", origin=origin)
         speed = float(payload_text)
         dron.changeNavSpeed(speed)
         publish_status("Velocidad de navegacion actualizada", origin=origin, speed=speed)
+        return
+
+    if command == "startDistanceFollow":
+        if not _require_state("flying", command, origin):
+            return
+        try:
+            cfg = _parse_json_payload(payload_text)
+        except Exception as e:
+            publish_error(
+                f"Payload startDistanceFollow invalido: {e}",
+                origin=origin,
+                command=command,
+                payload=payload_text,
+            )
+            return
+        follow_controller.start(origin=origin, config=cfg)
+        publish_status(
+            "Seguimiento por distancia activado",
+            origin=origin,
+            mode="distance-follow",
+            config=follow_controller.snapshot_config(),
+        )
+        return
+
+    if command == "updateDistanceFollow":
+        if not follow_controller.is_running():
+            publish_status(
+                "updateDistanceFollow ignorado: seguimiento no activo",
+                origin=origin,
+                level="warning",
+                command=command,
+            )
+            return
+        try:
+            obs = _parse_json_payload(payload_text)
+        except Exception as e:
+            publish_error(
+                f"Payload updateDistanceFollow invalido: {e}",
+                origin=origin,
+                command=command,
+                payload=payload_text,
+            )
+            return
+        if not follow_controller.update_observation(obs):
+            publish_error(
+                "Observacion de seguimiento invalida",
+                origin=origin,
+                command=command,
+                payload=payload_text,
+            )
+        return
+
+    if command == "stopDistanceFollow":
+        reason = "stop-request"
+        try:
+            data = _parse_json_payload(payload_text)
+            reason = str(data.get("reason", reason))
+        except Exception:
+            pass
+        follow_controller.stop(reason=reason, origin=origin)
+        publish_status("Seguimiento por distancia detenido", origin=origin, reason=reason)
         return
 
     if command == "changeAltitude":
@@ -312,6 +424,12 @@ def on_connect(mqtt_client, userdata, flags, rc):
 def on_disconnect(mqtt_client, userdata, rc):
     global mqtt_connected
     mqtt_connected = False
+    try:
+        controller = _ensure_follow_controller()
+        if controller.is_running():
+            controller.stop(reason="mqtt-disconnect")
+    except Exception:
+        pass
     if rc != 0:
         print(f"[MQTT] Desconexion inesperada (rc={rc}). Reconectando...")
     else:
@@ -352,6 +470,12 @@ def main():
             client.loop_forever()
         except KeyboardInterrupt:
             print("[AUTOPILOT] Detenido por usuario")
+            try:
+                controller = _ensure_follow_controller()
+                if controller.is_running():
+                    controller.stop(reason="service-stop")
+            except Exception:
+                pass
             break
         except Exception as e:
             print(f"[AUTOPILOT] Error en bucle principal: {e}")
