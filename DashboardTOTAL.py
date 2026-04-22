@@ -388,6 +388,17 @@ v16_updating    = True
 # ── YOLOv5 — detección multi-clase ───────────────────────────────────────────
 detect_object_ids = set()
 yolo_model        = None
+_auto_follow_enabled = True
+_auto_follow_active = False
+_auto_follow_lock = threading.Lock()
+_auto_follow_last_target_ts = 0.0
+
+# Calibracion simple distancia/bbox (aproximada; afinable en campo)
+_auto_follow_dist_k = 1.2
+_auto_follow_min_dist = 1.5
+_auto_follow_max_dist = 25.0
+_auto_follow_conf_min = 0.35
+_auto_follow_stop_after_s = 2.5
 
 COCO_GRUPOS = [
     ("Personas",    [("Persona",   0)]),
@@ -1009,7 +1020,8 @@ class CameraTrack(VideoStreamTrack):
         elif not detect_object_ids:
             self._last_boxes = []
 
-        for (x1, y1, x2, y2, label) in self._last_boxes:
+        for box in self._last_boxes:
+            x1, y1, x2, y2, label = box[:5]
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(frame, label, (x1, max(y1 - 8, 0)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
@@ -1398,6 +1410,7 @@ def load_yolo():
 
 
 def toggle_detect(obj_id: int, active: bool):
+    global _auto_follow_active
     if active:
         detect_object_ids.add(obj_id)
         if yolo_model is None:
@@ -1407,9 +1420,105 @@ def toggle_detect(obj_id: int, active: bool):
         detect_object_ids.discard(obj_id)
         print(f"[DET] -clase {obj_id}  activas={sorted(detect_object_ids)}")
 
+    if MODE == "global" and not detect_object_ids:
+        with _auto_follow_lock:
+            if _auto_follow_active:
+                try:
+                    stopDistanceFollow_global("no-classes-selected")
+                except Exception:
+                    pass
+                _auto_follow_active = False
+
+
+def _estimate_distance_from_bbox(x1, y1, x2, y2, frame_shape):
+    img_h = max(1, int(frame_shape[0]))
+    box_h = max(1, int(y2 - y1))
+    ratio_h = box_h / float(img_h)
+    ratio_h = max(0.01, min(1.0, ratio_h))
+
+    distance = _auto_follow_dist_k / ratio_h
+    return max(_auto_follow_min_dist, min(_auto_follow_max_dist, distance))
+
+
+def _pick_follow_target(detections):
+    if not detections:
+        return None
+
+    best = None
+    best_score = None
+    for d in detections:
+        conf = float(d.get("conf", 0.0))
+        if conf < _auto_follow_conf_min:
+            continue
+        area = max(1.0, float(d.get("area", 1.0)))
+        score = area * max(conf, 0.01)
+        if best is None or score > best_score:
+            best = d
+            best_score = score
+    return best
+
+
+def _auto_follow_from_detections(frame_shape, detections):
+    global _auto_follow_active, _auto_follow_last_target_ts
+
+    if MODE != "global":
+        return
+    if client_dashboard is None:
+        return
+    if not _auto_follow_enabled:
+        return
+
+    now = time.time()
+    best = _pick_follow_target(detections)
+
+    with _auto_follow_lock:
+        if best is None:
+            if _auto_follow_active and (now - _auto_follow_last_target_ts) > _auto_follow_stop_after_s:
+                try:
+                    stopDistanceFollow_global("target-lost")
+                    print("[FOLLOW] Objetivo perdido: stopDistanceFollow")
+                except Exception as e:
+                    print(f"[FOLLOW] Error deteniendo seguimiento: {e}")
+                _auto_follow_active = False
+            return
+
+        x1, y1, x2, y2 = best["x1"], best["y1"], best["x2"], best["y2"]
+        img_h, img_w = int(frame_shape[0]), int(frame_shape[1])
+        cx = (x1 + x2) * 0.5
+        offset_x = (cx - (img_w * 0.5)) / max(1.0, img_w * 0.5)
+        distance_m = _estimate_distance_from_bbox(x1, y1, x2, y2, frame_shape)
+        confidence = float(best.get("conf", 1.0))
+        target_id = f"{best.get('label', 'obj')}:{best.get('cls_id', 'na')}"
+
+        if not _auto_follow_active:
+            try:
+                startDistanceFollow_global({
+                    "lost_timeout": 2.5,
+                    "distance_deadband": 0.5,
+                    "lateral_deadband": 0.08,
+                })
+                _auto_follow_active = True
+                print("[FOLLOW] startDistanceFollow")
+            except Exception as e:
+                print(f"[FOLLOW] Error arrancando seguimiento: {e}")
+                return
+
+        try:
+            updateDistanceFollow_global(
+                distance_m=distance_m,
+                offset_x=offset_x,
+                confidence=confidence,
+                valid=True,
+                target_id=target_id,
+            )
+            _auto_follow_last_target_ts = now
+        except Exception as e:
+            print(f"[FOLLOW] Error enviando updateDistanceFollow: {e}")
+
 
 def run_detect(frame):
     if yolo_model is None or not detect_object_ids:
+        _auto_follow_from_detections(frame.shape, [])
         return []
 
     id_to_name = {
@@ -1424,11 +1533,26 @@ def run_detect(frame):
         results = yolo_model(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
     boxes = []
+    detections = []
     for *xyxy, conf, cls in results.xyxy[0]:
         cls_id = int(cls.item())
         if cls_id in detect_object_ids:
             x1, y1, x2, y2 = map(int, xyxy)
-            boxes.append((x1, y1, x2, y2, id_to_name.get(cls_id, str(cls_id))))
+            conf_f = float(conf.item())
+            label = id_to_name.get(cls_id, str(cls_id))
+            boxes.append((x1, y1, x2, y2, label, cls_id, conf_f))
+            detections.append({
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2,
+                "label": label,
+                "cls_id": cls_id,
+                "conf": conf_f,
+                "area": max(1, (x2 - x1) * (y2 - y1)),
+            })
+
+    _auto_follow_from_detections(frame.shape, detections)
     return boxes
 
 
@@ -1567,7 +1691,8 @@ async def show_video_local(track):
                     last_boxes = await asyncio.get_event_loop().run_in_executor(
                         None, run_detect, img.copy()
                     )
-                for (x1, y1, x2, y2, label) in last_boxes:
+                for box in last_boxes:
+                    x1, y1, x2, y2, label = box[:5]
                     cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     cv2.putText(img, label, (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
