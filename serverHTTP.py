@@ -1,16 +1,28 @@
 """
-Gateway HTTP → MQTT + señalización WebRTC para cámara del dron.
+Gateway HTTPS → MQTT + señalización WebRTC para cámara del dron.
 
 Instalación:
     pip install flask paho-mqtt
 
+Genera el certificado TLS autofirmado (una sola vez):
+    openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem \
+        -days 365 -nodes \
+        -subj "/CN=localhost" \
+        -addext "subjectAltName=IP:0.0.0.0,IP:127.0.0.1,IP:TU_IP_LOCAL"
+
+    Sustituye TU_IP_LOCAL por la IP de tu máquina en la red local,
+    por ejemplo: -addext "subjectAltName=IP:0.0.0.0,IP:127.0.0.1,IP:192.168.1.50"
+    Coloca cert.pem y key.pem en la misma carpeta que este script.
+
 Uso:
-    python gateway.py
-    Abre http://localhost:5000 en el móvil/navegador.
+    python serverHTTP.py
+    Abre https://TU_IP_LOCAL:5000 en el móvil/navegador.
+    La primera vez Chrome pedirá aceptar el certificado autofirmado:
+    pulsa "Avanzado" → "Continuar hacia...".
 
 Arquitectura:
     - El gateway se conecta a HiveMQ como cliente "mobileFlask".
-    - Reenvía comandos HTTP → MQTT al AutopilotService.
+    - Reenvía comandos HTTPS → MQTT al AutopilotService.
     - Para la cámara actúa de intermediario de señalización:
         1. Publica su origen en webrtc/request para pedir stream al CameraService.
         2. Recibe la oferta SDP en webrtc/offer/mobileFlask_<id>.
@@ -271,7 +283,7 @@ def index():
         return send_from_directory("templates", "index.html")
     except Exception:
         return (
-            "<h3>Gateway HTTP → MQTT</h3>"
+            "<h3>Gateway HTTPS → MQTT</h3>"
             "<p>Coloca tu cliente en <code>templates/index.html</code></p>"
         )
 
@@ -519,7 +531,31 @@ threading.Thread(target=_telem_watchdog, daemon=True).start()
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    # ── Certificados TLS ──────────────────────────────────────────────────────
+    # Busca cert.pem y key.pem en la misma carpeta que este script.
+    # Genera el certificado autofirmado con el comando del encabezado de este archivo.
+    cert_file = os.path.join(BASE_DIR, "cert.pem")
+    key_file  = os.path.join(BASE_DIR, "key.pem")
+
+    if not os.path.exists(cert_file) or not os.path.exists(key_file):
+        print("=" * 70)
+        print("[ERROR] No se encontraron cert.pem / key.pem.")
+        print("Genera el certificado con:")
+        print("  openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem \\")
+        print('    -days 365 -nodes -subj "/CN=localhost" \\')
+        print('    -addext "subjectAltName=IP:0.0.0.0,IP:127.0.0.1,IP:TU_IP_LOCAL"')
+        print("=" * 70)
+        raise SystemExit(1)
+
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ssl_context.load_cert_chain(cert_file, key_file)
+
     print(f"[MAIN] Gateway arrancando — origen MQTT: {MY_ORIGIN}")
-    print("[MAIN] Flask en http://0.0.0.0:5000")
+    print("[MAIN] Flask en https://0.0.0.0:5000")
+    print("[MAIN] Abre https://TU_IP_LOCAL:5000 en el navegador.")
+    print("[MAIN] La primera vez acepta el certificado autofirmado en Chrome:")
+    print('       "Avanzado" → "Continuar hacia..."')
+
     # use_reloader=False para no lanzar el hilo MQTT dos veces
-    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
+    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False,
+            ssl_context=ssl_context)
