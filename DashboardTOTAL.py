@@ -50,6 +50,13 @@ HIVEMQ_USERS = [
 USER_AUTOPILOT = "autopilotServiceDemo"
 PASS_AUTOPILOT = "qkdb!LasqvHfy9V"
 
+# Credenciales compartidas para el canal WebRTC (CameraService + todos los clientes).
+# Siempre usamos el slot 0 (InterfazGlobal) para que CameraService y clientes
+# puedan publicar/suscribirse a los topics webrtc/* con el mismo usuario,
+# evitando bloqueos de ACL entre distintos usuarios HiveMQ.
+USER_WEBRTC = HIVEMQ_USERS[0]["user"]
+PASS_WEBRTC = HIVEMQ_USERS[0]["password"]
+
 T_CAM_REQUEST = "webrtc/request"
 T_CAM_OFFER   = "webrtc/offer"
 T_CAM_ANSWER  = "webrtc/answer"
@@ -864,25 +871,53 @@ class CameraTrack(VideoStreamTrack):
             pass
         super().stop()
 
+# Servidores TURN públicos de Open Relay (sin cuenta, siempre disponibles).
+# Se usan como base garantizada; Metered se añade encima si funciona.
+_OPEN_RELAY_SERVERS = [
+    RTCIceServer(
+        urls=["turn:openrelay.metered.ca:80",
+              "turn:openrelay.metered.ca:443",
+              "turn:openrelay.metered.ca:443?transport=tcp",
+              "turns:openrelay.metered.ca:443"],
+        username="openrelayproject",
+        credential="openrelayproject",
+    ),
+    RTCIceServer(urls=["stun:stun.l.google.com:19302",
+                       "stun:stun1.l.google.com:19302"]),
+]
+
+
 def get_ice_config():
     print("[ICE] Obteniendo credenciales TURN de Metered...")
+    ice_servers = list(_OPEN_RELAY_SERVERS)   # base siempre presente
+
     try:
-        servers = requests.get(METERED_API, timeout=10).json()
-        print(f"[ICE] {len(servers)} servidores:")
-        ice_servers = []
-        for s in servers:
-            urls = s.get("urls")
-            if isinstance(urls, str): urls = [urls]
-            u, c = s.get("username"), s.get("credential")
-            print(f"  {urls[0]}")
-            if u and c:
-                ice_servers.append(RTCIceServer(urls=urls, username=u, credential=c))
+        resp = requests.get(METERED_API, timeout=8)
+        if resp.status_code != 200:
+            print(f"[ICE] Metered API devuelvió {resp.status_code} — usando Open Relay")
+        else:
+            servers = resp.json()
+            metered_servers = []
+            for s in servers:
+                urls = s.get("urls")
+                if isinstance(urls, str):
+                    urls = [urls]
+                u, c = s.get("username"), s.get("credential")
+                if u and c:
+                    metered_servers.append(
+                        RTCIceServer(urls=urls, username=u, credential=c)
+                    )
+            if metered_servers:
+                ice_servers = metered_servers + ice_servers
+                print(f"[ICE] {len(metered_servers)} servidores Metered + Open Relay de respaldo:")
             else:
-                ice_servers.append(RTCIceServer(urls=urls))
-        return RTCConfiguration(iceServers=ice_servers)
+                print("[ICE] Metered no devolvió servidores con credenciales — usando Open Relay")
+            for srv in ice_servers[:3]:
+                print(f"  {srv.urls[0]}")
     except Exception as e:
-        print(f"[ICE] Error: {e} — usando STUN de respaldo")
-        return RTCConfiguration(iceServers=[RTCIceServer(urls="stun:stun.l.google.com:19302")])
+        print(f"[ICE] Error contactando Metered ({e}) — usando Open Relay")
+
+    return RTCConfiguration(iceServers=ice_servers)
 
 
 def _silence_aioice_handler(loop, context):
@@ -932,20 +967,34 @@ async def _cam_connect_peer(origen: str, mqtt_cam_client):
     mqtt_cam_client.subscribe(t_answer_peer)
 
     await pc_peer.setLocalDescription(await pc_peer.createOffer())
-    print(f"[CAM:{origen}] Esperando ICE gathering...")
-    while pc_peer.iceGatheringState != "complete":
-        await asyncio.sleep(0.2)
+
+    # Esperar gathering con evento (no polling) — garantiza candidatos TURN/relay
+    print(f"[CAM:{origen}] Esperando ICE gathering (máx 8 s)...")
+    cam_gathering_done = asyncio.Event()
+
+    @pc_peer.on("icegatheringstatechange")
+    def _on_cam_gathering():
+        if pc_peer.iceGatheringState == "complete":
+            cam_gathering_done.set()
+
+    if pc_peer.iceGatheringState == "complete":
+        cam_gathering_done.set()
+
+    try:
+        await asyncio.wait_for(cam_gathering_done.wait(), timeout=8.0)
+    except asyncio.TimeoutError:
+        print(f"[CAM:{origen}] ICE gathering timeout (8 s) — usando candidatos disponibles")
 
     candidates = [l for l in pc_peer.localDescription.sdp.splitlines()
                   if l.startswith("a=candidate")]
     has_relay = any("relay" in c for c in candidates)
-    print(f"[CAM:{origen}] {len(candidates)} candidates — "
-          f"{'✓ relay' if has_relay else '⚠ sin relay'}")
+    print(f"[CAM:{origen}] {len(candidates)} candidatos — "
+          f"{'\u2713 relay' if has_relay else '\u26a0 sin relay'}")
 
     mqtt_cam_client.publish(t_offer_peer, json.dumps({
         "sdp":  pc_peer.localDescription.sdp,
         "type": pc_peer.localDescription.type,
-    }), retain=False)
+    }), retain=True)
     print(f"[CAM:{origen}] Oferta publicada → {t_offer_peer}")
 
     try:
@@ -971,9 +1020,6 @@ async def _cam_connect_peer(origen: str, mqtt_cam_client):
 
 async def _apply_answer_peer(pc_peer, data, event):
     try:
-        if pc_peer.signalingState == "stable":
-            print("[CAM] Peer ya estable — ignorando answer duplicada")
-            return
         await pc_peer.setRemoteDescription(
             RTCSessionDescription(sdp=data["sdp"], type=data["type"])
         )
@@ -1017,33 +1063,18 @@ async def run_camera_global(mqtt_cam_client):
             payload = msg.payload.decode("utf-8").strip()
             if not payload:
                 return
-            import json as _json
-            ids = _json.loads(payload)
-            detect_object_ids.clear()
-            detect_object_ids.update(ids)
-            print(f"[COCO] Clases activas desde C#: {sorted(detect_object_ids)}")
-            if ids and yolo_model is None:
-                import threading as _threading
-                _threading.Thread(target=load_yolo, daemon=True).start()
-        except Exception as e:
-            print(f"[COCO] Error parseando detectClasses: {e}")
-
-    mqtt_cam_client.message_callback_add("webrtc/detectClasses", _on_detect_classes)
-
-    mqtt_cam_client.message_callback_add(T_CAM_REQUEST, _on_request)
-    mqtt_cam_client.subscribe(T_CAM_REQUEST)
-    print(f"[CAM] Suscrito a solicitudes en {T_CAM_REQUEST}")
-
-    def _on_detect_classes(cli, userdata, msg):
-        try:
-            ids = json.loads(msg.payload.decode("utf-8").strip())
+            ids = json.loads(payload)
             detect_object_ids.clear()
             detect_object_ids.update(ids)
             print(f"[COCO] Clases activas: {sorted(detect_object_ids)}")
             if ids and yolo_model is None:
                 threading.Thread(target=load_yolo, daemon=True).start()
         except Exception as e:
-            print(f"[COCO] Error: {e}")
+            print(f"[COCO] Error parseando detectClasses: {e}")
+
+    mqtt_cam_client.message_callback_add(T_CAM_REQUEST, _on_request)
+    mqtt_cam_client.subscribe(T_CAM_REQUEST)
+    print(f"[CAM] Suscrito a solicitudes en {T_CAM_REQUEST}")
 
     mqtt_cam_client.message_callback_add("webrtc/detectClasses", _on_detect_classes)
     mqtt_cam_client.subscribe("webrtc/detectClasses")
@@ -1078,6 +1109,10 @@ async def run_camera_global(mqtt_cam_client):
 def start_camera_service_global():
     global camera_service_mode, camera_service_running
 
+    if USER_DASHBOARD is None or PASS_DASHBOARD is None:
+        print("[CAM] ERROR: credenciales HiveMQ no asignadas — seleccionar_slot() debe ejecutarse primero")
+        return
+
     if camera_service_running:
         print("[CAM] CameraService ya está activo")
         return
@@ -1090,7 +1125,7 @@ def start_camera_service_global():
             cam_client = mqtt.Client(client_id=f"CameraService_{_INST_SUFFIX}", transport="websockets")
             cam_client.ws_set_options(path="/mqtt")
             cam_client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
-            cam_client.username_pw_set(USER_DASHBOARD, PASS_DASHBOARD)
+            cam_client.username_pw_set(USER_WEBRTC, PASS_WEBRTC)
             cam_client.connect(BROKER_DASHBOARD, PORT)
             cam_client.loop_start()
 
@@ -1318,22 +1353,39 @@ def webrtc_thread_dashboard():
     t_my_answer  = f"{T_CAM_ANSWER}/{MY_ORIGIN}"
     t_my_request = T_CAM_REQUEST
 
+    # Cliente MQTT dedicado para la señalización WebRTC.
+    # Usa USER_WEBRTC (slot 0 / InterfazGlobal) igual que el CameraService,
+    # garantizando que ambos extremos comparten el mismo usuario HiveMQ y
+    # no hay bloqueos de ACL al publicar/recibir en los topics webrtc/*.
+    import uuid as _uuid_webrtc
+    webrtc_mqtt = mqtt.Client(
+        client_id=f"WebRTCDash_{_uuid_webrtc.uuid4().hex[:6]}",
+        transport="websockets"
+    )
+    webrtc_mqtt.ws_set_options(path="/mqtt")
+    webrtc_mqtt.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
+    webrtc_mqtt.username_pw_set(USER_WEBRTC, PASS_WEBRTC)
+    try:
+        webrtc_mqtt.connect(BROKER_DASHBOARD, PORT, keepalive=30)
+    except Exception as e:
+        print(f"[WebRTC] Error conectando cliente MQTT de señalización: {e}")
+        return
+    webrtc_mqtt.loop_start()
+
     def _on_offer(cli, userdata, msg):
         if msg.topic == t_my_offer and msg.payload:
-            if pc.connectionState in ("connecting", "connected"):
-                return
             try:
                 data = json.loads(msg.payload)
             except Exception:
                 return
             print(f"[SIG] Oferta recibida en {t_my_offer}")
             asyncio.run_coroutine_threadsafe(
-                handle_offer_dashboard(data, t_my_answer), loop_dashboard)
+                handle_offer_dashboard(data, t_my_answer, webrtc_mqtt), loop_dashboard)
 
-    client_dashboard.message_callback_add(t_my_offer, _on_offer)
-    client_dashboard.subscribe(t_my_offer)
+    webrtc_mqtt.message_callback_add(t_my_offer, _on_offer)
+    webrtc_mqtt.subscribe(t_my_offer)
 
-    client_dashboard.publish(t_my_request, MY_ORIGIN, retain=False)
+    webrtc_mqtt.publish(t_my_request, MY_ORIGIN, retain=True)
     print(f"[WebRTC] Solicitud enviada a {t_my_request} (payload={MY_ORIGIN})")
 
     async def _retry_request():
@@ -1342,10 +1394,17 @@ def webrtc_thread_dashboard():
             if pc.connectionState in ("connected", "connecting"):
                 break
             print(f"[WebRTC] Re-solicitud → {t_my_request}")
-            client_dashboard.publish(t_my_request, MY_ORIGIN, retain=False)
+            webrtc_mqtt.publish(t_my_request, MY_ORIGIN, retain=True)
 
     asyncio.run_coroutine_threadsafe(_retry_request(), loop_dashboard)
     loop_dashboard.run_forever()
+
+    # Limpiar cliente WebRTC al salir
+    try:
+        webrtc_mqtt.loop_stop()
+        webrtc_mqtt.disconnect()
+    except Exception:
+        pass
 
 
 async def webrtc_receive_local():
@@ -1431,23 +1490,41 @@ def webrtc_thread_dashboard_local():
         print(f"[VIDEO] Hilo local terminó: {e}")
 
 
-async def handle_offer_dashboard(data, t_answer: str):
+async def handle_offer_dashboard(data, t_answer: str, webrtc_mqtt=None):
     await pc.setRemoteDescription(
         RTCSessionDescription(sdp=data["sdp"], type=data["type"])
     )
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
 
-    print("[WebRTC] Esperando ICE gathering...")
-    while pc.iceGatheringState != "complete":
-        await asyncio.sleep(0.2)
+    # Esperar a que el ICE gathering termine usando un evento en lugar de polling.
+    # Esto garantiza que los candidatos TURN/relay tienen tiempo de llegar antes
+    # de enviar la answer. Timeout de 8 s para no bloquear indefinidamente.
+    print("[WebRTC] Esperando ICE gathering (máx 8 s)...")
+    gathering_done = asyncio.Event()
+
+    @pc.on("icegatheringstatechange")
+    def _on_gathering():
+        if pc.iceGatheringState == "complete":
+            gathering_done.set()
+
+    # Por si ya estaba complete antes de registrar el handler
+    if pc.iceGatheringState == "complete":
+        gathering_done.set()
+
+    try:
+        await asyncio.wait_for(gathering_done.wait(), timeout=8.0)
+    except asyncio.TimeoutError:
+        print("[WebRTC] ICE gathering timeout (8 s) — enviando con candidatos disponibles")
 
     candidates = [l for l in pc.localDescription.sdp.splitlines()
                   if l.startswith("a=candidate")]
     has_relay = any("relay" in c for c in candidates)
-    print(f"[WebRTC] Answer lista — {'✓ relay' if has_relay else '⚠ sin relay'}")
+    print(f"[WebRTC] Answer lista — {'✓ relay' if has_relay else '⚠ sin relay'} ({len(candidates)} candidatos)")
 
-    client_dashboard.publish(t_answer, json.dumps({
+    # Usar el cliente WebRTC dedicado si está disponible, sino client_dashboard
+    publisher = webrtc_mqtt if webrtc_mqtt is not None else client_dashboard
+    publisher.publish(t_answer, json.dumps({
         "sdp":  pc.localDescription.sdp,
         "type": pc.localDescription.type,
     }))
