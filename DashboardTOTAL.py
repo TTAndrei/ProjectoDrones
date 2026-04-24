@@ -12,7 +12,7 @@
 # =====================================================
 
 import asyncio, json, ssl, threading, time, requests, sys
-import logging, warnings
+import logging, warnings, math
 from datetime import datetime, timedelta
 
 # Silenciar FutureWarning de torch en YOLOv5
@@ -277,8 +277,9 @@ dron = Dron()
 
 altShowLbl = headingShowLbl = stateShowLbl = None
 speedShowLbl = battShowLbl = gpsShowLbl = None
-connectBtn = arm_takeOffBtn = landBtn = RTLBtn = None
+connectBtn = arm_takeOffBtn = landBtn = RTLBtn = followBtn = None
 speedSldr  = gradesSldr = None
+followTargetDistVar = followDeadzoneVar = None
 root_window = None
 _connect_attempt_token = 0
 _dashboard_telem_source = None
@@ -388,14 +389,16 @@ v16_updating    = True
 # ── YOLOv5 — detección multi-clase ───────────────────────────────────────────
 detect_object_ids = set()
 yolo_model        = None
-_auto_follow_enabled = True
+_auto_follow_enabled = False
 _auto_follow_active = False
 _auto_follow_lock = threading.Lock()
 _auto_follow_last_target_ts = 0.0
 
 # Calibracion simple distancia/bbox (aproximada; afinable en campo)
 _auto_follow_dist_k = 1.2
-_auto_follow_min_dist = 1.5
+_auto_follow_object_size_m = 1.0
+_auto_follow_camera_vfov_deg = 49.5
+_auto_follow_min_dist = 0.1
 _auto_follow_max_dist = 25.0
 _auto_follow_conf_min = 0.35
 _auto_follow_stop_after_s = 2.5
@@ -1191,7 +1194,7 @@ async def run_camera_global(mqtt_cam_client):
             if not payload:
                 return
             import json as _json
-            ids = _json.loads(payload)
+            ids = _normalize_detect_ids(_json.loads(payload))
             detect_object_ids.clear()
             detect_object_ids.update(ids)
             print(f"[COCO] Clases activas desde C#: {sorted(detect_object_ids)}")
@@ -1206,19 +1209,6 @@ async def run_camera_global(mqtt_cam_client):
     mqtt_cam_client.message_callback_add(T_CAM_REQUEST, _on_request)
     mqtt_cam_client.subscribe(T_CAM_REQUEST)
     print(f"[CAM] Suscrito a solicitudes en {T_CAM_REQUEST}")
-
-    def _on_detect_classes(cli, userdata, msg):
-        try:
-            ids = json.loads(msg.payload.decode("utf-8").strip())
-            detect_object_ids.clear()
-            detect_object_ids.update(ids)
-            print(f"[COCO] Clases activas: {sorted(detect_object_ids)}")
-            if ids and yolo_model is None:
-                threading.Thread(target=load_yolo, daemon=True).start()
-        except Exception as e:
-            print(f"[COCO] Error: {e}")
-
-    mqtt_cam_client.message_callback_add("webrtc/detectClasses", _on_detect_classes)
     mqtt_cam_client.subscribe("webrtc/detectClasses")
     print("[CAM] Suscrito a webrtc/detectClasses")
 
@@ -1409,6 +1399,18 @@ def load_yolo():
         print("[DET] Modelo listo")
 
 
+def _normalize_detect_ids(raw_ids):
+    normalized = set()
+    if not isinstance(raw_ids, (list, tuple, set)):
+        return normalized
+    for raw_id in raw_ids:
+        try:
+            normalized.add(int(raw_id))
+        except Exception:
+            continue
+    return normalized
+
+
 def toggle_detect(obj_id: int, active: bool):
     global _auto_follow_active
     if active:
@@ -1430,14 +1432,46 @@ def toggle_detect(obj_id: int, active: bool):
                 _auto_follow_active = False
 
 
-def _estimate_distance_from_bbox(x1, y1, x2, y2, frame_shape):
+def _estimate_distance_from_bbox(x1, y1, x2, y2, frame_shape, clamp=True):
     img_h = max(1, int(frame_shape[0]))
     box_h = max(1, int(y2 - y1))
-    ratio_h = box_h / float(img_h)
-    ratio_h = max(0.01, min(1.0, ratio_h))
 
-    distance = _auto_follow_dist_k / ratio_h
-    return max(_auto_follow_min_dist, min(_auto_follow_max_dist, distance))
+    # Modelo pinhole: distance = (focal_px * object_size_m) / bbox_px
+    vfov_rad = math.radians(max(5.0, min(170.0, float(_auto_follow_camera_vfov_deg))))
+    focal_px = (img_h * 0.5) / max(1e-6, math.tan(vfov_rad * 0.5))
+    object_size_m = max(0.01, float(_auto_follow_object_size_m))
+    distance = (float(_auto_follow_dist_k) * object_size_m * focal_px) / float(box_h)
+
+    if clamp:
+        return max(_auto_follow_min_dist, min(_auto_follow_max_dist, distance))
+    return distance
+
+
+def set_detect_object_physical_size(size_text):
+    global _auto_follow_object_size_m
+    try:
+        raw_text = str(size_text).strip().lower().replace(",", ".")
+        if not raw_text:
+            raise ValueError("empty value")
+
+        if raw_text.endswith("cm"):
+            size_value = float(raw_text[:-2].strip()) / 100.0
+        elif raw_text.endswith("m"):
+            size_value = float(raw_text[:-1].strip())
+        else:
+            size_value = float(raw_text)
+            # Si se escribe un valor grande sin unidad, se asume cm.
+            if size_value > 3.0:
+                size_value = size_value / 100.0
+
+        if size_value <= 0.0:
+            raise ValueError("size must be positive")
+        _auto_follow_object_size_m = size_value
+        print(f"[DEPTH] Medida física del objeto: {_auto_follow_object_size_m:.3f} m")
+        return True
+    except Exception:
+        print(f"[DEPTH] Valor inválido '{size_text}'. Usa 'm' o 'cm' (ej: 1.70, 0.17, 17cm)")
+        return False
 
 
 def _pick_follow_target(detections):
@@ -1461,27 +1495,12 @@ def _pick_follow_target(detections):
 def _auto_follow_from_detections(frame_shape, detections):
     global _auto_follow_active, _auto_follow_last_target_ts
 
-    if MODE != "global":
-        return
-    if client_dashboard is None:
-        return
     if not _auto_follow_enabled:
         return
 
     now = time.time()
     best = _pick_follow_target(detections)
-
-    with _auto_follow_lock:
-        if best is None:
-            if _auto_follow_active and (now - _auto_follow_last_target_ts) > _auto_follow_stop_after_s:
-                try:
-                    stopDistanceFollow_global("target-lost")
-                    print("[FOLLOW] Objetivo perdido: stopDistanceFollow")
-                except Exception as e:
-                    print(f"[FOLLOW] Error deteniendo seguimiento: {e}")
-                _auto_follow_active = False
-            return
-
+    if best is not None:
         x1, y1, x2, y2 = best["x1"], best["y1"], best["x2"], best["y2"]
         img_h, img_w = int(frame_shape[0]), int(frame_shape[1])
         cx = (x1 + x2) * 0.5
@@ -1493,31 +1512,86 @@ def _auto_follow_from_detections(frame_shape, detections):
             f"[FOLLOW] Distancia estimada={distance_m:.2f}m "
             f"offset_x={offset_x:+.3f} conf={confidence:.2f} target={target_id}"
         )
+    else:
+        offset_x = 0.0
+        distance_m = None
+        confidence = 0.0
+        target_id = None
+
+    if MODE == "global":
+        if client_dashboard is None:
+            return
+        with _auto_follow_lock:
+            if best is None:
+                if _auto_follow_active and (now - _auto_follow_last_target_ts) > _auto_follow_stop_after_s:
+                    try:
+                        stopDistanceFollow_global("target-lost")
+                        print("[FOLLOW] Objetivo perdido: stopDistanceFollow")
+                    except Exception as e:
+                        print(f"[FOLLOW] Error deteniendo seguimiento: {e}")
+                    _auto_follow_active = False
+                return
+
+            if not _auto_follow_active:
+                try:
+                    startDistanceFollow_global(_follow_config())
+                    _auto_follow_active = True
+                    print("[FOLLOW] startDistanceFollow")
+                except Exception as e:
+                    print(f"[FOLLOW] Error arrancando seguimiento: {e}")
+                    return
+
+            try:
+                updateDistanceFollow_global(
+                    distance_m=distance_m,
+                    offset_x=offset_x,
+                    confidence=confidence,
+                    valid=True,
+                    target_id=target_id,
+                )
+                _auto_follow_last_target_ts = now
+            except Exception as e:
+                print(f"[FOLLOW] Error enviando updateDistanceFollow: {e}")
+        return
+
+    controller = _ensure_distance_follow_controller()
+    with _auto_follow_lock:
+        if best is None:
+            if _auto_follow_active and (now - _auto_follow_last_target_ts) > _auto_follow_stop_after_s:
+                try:
+                    controller.update_observation({
+                        "distance_m": _auto_follow_max_dist,
+                        "offset_x": 0.0,
+                        "valid": False,
+                        "confidence": 0.0,
+                        "target_id": None,
+                    })
+                    print("[FOLLOW] Objetivo perdido: stop local implícito")
+                except Exception as e:
+                    print(f"[FOLLOW] Error marcando objetivo perdido: {e}")
+                _auto_follow_active = False
+            return
 
         if not _auto_follow_active:
             try:
-                startDistanceFollow_global({
-                    "lost_timeout": 2.5,
-                    "distance_deadband": 0.5,
-                    "lateral_deadband": 0.08,
-                })
+                controller.start(origin="local", config=_follow_config())
                 _auto_follow_active = True
-                print("[FOLLOW] startDistanceFollow")
+                print("[FOLLOW] startDistanceFollow (local)")
             except Exception as e:
-                print(f"[FOLLOW] Error arrancando seguimiento: {e}")
+                print(f"[FOLLOW] Error arrancando seguimiento local: {e}")
                 return
 
         try:
-            updateDistanceFollow_global(
-                distance_m=distance_m,
-                offset_x=offset_x,
-                confidence=confidence,
-                valid=True,
-                target_id=target_id,
-            )
+            controller.update_observation({
+                "distance_m": distance_m,
+                "offset_x": offset_x,
+                "valid": True,
+                "confidence": confidence,
+                "target_id": target_id,
+            })
             _auto_follow_last_target_ts = now
         except Exception as e:
-            print(f"[FOLLOW] Error enviando updateDistanceFollow: {e}")
+            print(f"[FOLLOW] Error actualizando seguimiento local: {e}")
 
 
 def run_detect(frame):
@@ -1555,6 +1629,23 @@ def run_detect(frame):
                 "conf": conf_f,
                 "area": max(1, (x2 - x1) * (y2 - y1)),
             })
+
+    best_depth_target = _pick_follow_target(detections)
+    if best_depth_target is not None:
+        raw_distance_m = _estimate_distance_from_bbox(
+            best_depth_target["x1"],
+            best_depth_target["y1"],
+            best_depth_target["x2"],
+            best_depth_target["y2"],
+            frame.shape,
+            clamp=False,
+        )
+        distance_m = max(_auto_follow_min_dist, min(_auto_follow_max_dist, raw_distance_m))
+        print(
+            f"[DEPTH] Distancia estimada={raw_distance_m:.2f}m "
+            f"target={best_depth_target.get('label', 'obj')}:{best_depth_target.get('cls_id', 'na')} "
+            f"conf={float(best_depth_target.get('conf', 0.0)):.2f}"
+        )
 
     _auto_follow_from_detections(frame.shape, detections)
     return boxes
@@ -2028,10 +2119,12 @@ def takeoff_global():
     arm_takeOffBtn.configure(text='Despegando...', fg='black', bg='yellow')
 
 def land_global():
+    _stop_follow_mode("land")
     client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/Land')
     landBtn.configure(text='Aterrizando...', fg='black', bg='yellow')
 
 def RTL_global():
+    _stop_follow_mode("rtl")
     client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/RTL')
     RTLBtn.configure(text='Retornando...', fg='black', bg='yellow')
 
@@ -2045,7 +2138,9 @@ def go_global(direction, btn):
 def startTelem_global(): client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/startTelemetry')
 def stopTelem_global():  client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/stopTelemetry')
 def changeHeading_global(e): client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/changeHeading', str(gradesSldr.get()))
-def changeNavSpeed_global(e): client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/changeNavSpeed', str(speedSldr.get()))
+def changeNavSpeed_global(e):
+    _stop_follow_mode("manual-speed-change")
+    client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/changeNavSpeed', str(speedSldr.get()))
 
 
 def startDistanceFollow_global(config=None):
@@ -2073,6 +2168,95 @@ def stopDistanceFollow_global(reason="manual"):
         f'{MY_ORIGIN}/autopilotServiceDemo/stopDistanceFollow',
         json.dumps({"reason": str(reason)}),
     )
+
+
+def _follow_config():
+    def _read_float(var, fallback):
+        try:
+            if var is None:
+                return float(fallback)
+            raw = str(var.get()).strip().lower().replace(",", ".")
+            if raw.endswith("m"):
+                raw = raw[:-1].strip()
+            value = float(raw)
+            return value
+        except Exception:
+            return float(fallback)
+
+    target_distance = max(0.1, _read_float(followTargetDistVar, 5.0))
+    lateral_deadzone = max(0.0, _read_float(followDeadzoneVar, 0.15))
+
+    return {
+        "target_distance": target_distance,
+        "distance_deadband": 0.45,
+        "lateral_deadband": lateral_deadzone,
+        "kp_distance": 0.7,
+        "kp_lateral": 1.15,
+        "min_speed": 0.35,
+        "max_speed": 2.5,
+        "lost_timeout": 2.5,
+        "max_offset_abs": 1.0,
+    }
+
+
+def _set_follow_button_state(enabled: bool):
+    if followBtn is None:
+        return
+    if enabled:
+        followBtn.configure(text="Parar seguimiento", fg="white", bg="#2e8b57")
+    else:
+        followBtn.configure(text="Modo seguimiento", fg="black", bg="dark orange")
+
+
+def _start_follow_mode():
+    global _auto_follow_enabled, _auto_follow_active, _auto_follow_last_target_ts
+    if MODE == "local" or IS_GROUND_STATION:
+        if not _is_drone_flying():
+            print("[FOLLOW] No se puede activar seguimiento: el dron no está en vuelo")
+            _ui_call(_set_follow_button_state, False)
+            _auto_follow_enabled = False
+            return
+    _auto_follow_enabled = True
+    _auto_follow_active = True
+    _auto_follow_last_target_ts = time.time()
+    cfg = _follow_config()
+    try:
+        if MODE == "global":
+            startDistanceFollow_global(cfg)
+        else:
+            _ensure_distance_follow_controller().start(origin="local", config=cfg)
+        _ui_call(_set_follow_button_state, True)
+        print("[FOLLOW] Modo seguimiento activado")
+    except Exception as e:
+        _auto_follow_enabled = False
+        _ui_call(_set_follow_button_state, False)
+        print(f"[FOLLOW] Error activando seguimiento: {e}")
+
+
+def _stop_follow_mode(reason="manual"):
+    global _auto_follow_enabled, _auto_follow_active
+    _auto_follow_enabled = False
+    with _auto_follow_lock:
+        _auto_follow_active = False
+    try:
+        if MODE == "global":
+            stopDistanceFollow_global(reason)
+        else:
+            controller = _ensure_distance_follow_controller()
+            if controller.is_running():
+                controller.stop(reason=reason, origin="local")
+        print(f"[FOLLOW] Modo seguimiento detenido ({reason})")
+    except Exception as e:
+        print(f"[FOLLOW] Error deteniendo seguimiento: {e}")
+    finally:
+        _ui_call(_set_follow_button_state, False)
+
+
+def toggle_follow_mode():
+    if _auto_follow_enabled:
+        _stop_follow_mode("toggle-off")
+    else:
+        _start_follow_mode()
 
 
 def _start_telemetry_watchdog_global():
@@ -2124,6 +2308,7 @@ def takeoff_local():
     arm_takeOffBtn.configure(text='Despegando...', fg='black', bg='yellow')
 
 def land_local():
+    _stop_follow_mode("land")
     dron.Land(blocking=False,
               callback=lambda: (
                   arm_takeOffBtn.configure(text='Despegar', fg='black', bg='dark orange'),
@@ -2133,12 +2318,14 @@ def land_local():
     landBtn.configure(text='Aterrizando...', fg='black', bg='yellow')
 
 def RTL_local():
+    _stop_follow_mode("rtl")
     dron.RTL()
     RTLBtn.configure(text='Retornando...', fg='black', bg='yellow')
 
 def go_local(direction, btn):
     global previousBtn
     if previousBtn: previousBtn.configure(fg='black', bg='dark orange')
+    _stop_follow_mode("manual-go")
     dron.go(direction)
     btn.configure(fg='white', bg='green')
     previousBtn = btn
@@ -2161,7 +2348,9 @@ def startTelem_local():
 
 def stopTelem_local():  dron.stop_sending_telemetry_info()
 def changeHeading_local(e):  dron.changeHeading(int(gradesSldr.get()))
-def changeNavSpeed_local(e): dron.changeNavSpeed(float(speedSldr.get()))
+def changeNavSpeed_local(e):
+    _stop_follow_mode("manual-speed-change")
+    dron.changeNavSpeed(float(speedSldr.get()))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2229,6 +2418,70 @@ def _build_detection_panel(parent):
               ).grid(row=row_idx, column=0, columnspan=COLS,
                      padx=4, pady=(6, 4), sticky="w")
 
+    row_idx += 1
+    tk.Label(
+        inner,
+        text="Distancia objetivo de seguimiento (m):",
+        font=("Arial", 8, "bold"),
+        fg="#333333",
+    ).grid(row=row_idx, column=0, columnspan=2, sticky="w", padx=4, pady=(6, 2))
+
+    global followTargetDistVar, followDeadzoneVar
+    followTargetDistVar = tk.StringVar(value="5.0")
+    target_entry = tk.Entry(inner, textvariable=followTargetDistVar, width=10, font=("Arial", 8))
+    target_entry.grid(row=row_idx, column=2, sticky="w", padx=(0, 4), pady=(6, 2))
+
+    row_idx += 1
+    tk.Label(
+        inner,
+        text="Deadzone lateral (m):",
+        font=("Arial", 8, "bold"),
+        fg="#333333",
+    ).grid(row=row_idx, column=0, columnspan=2, sticky="w", padx=4, pady=(2, 2))
+
+    followDeadzoneVar = tk.StringVar(value="0.15")
+    deadzone_entry = tk.Entry(inner, textvariable=followDeadzoneVar, width=10, font=("Arial", 8))
+    deadzone_entry.grid(row=row_idx, column=2, sticky="w", padx=(0, 4), pady=(2, 2))
+
+    row_idx += 1
+    tk.Label(
+        inner,
+        text="Medida física del objeto (m):",
+        font=("Arial", 8, "bold"),
+        fg="#333333",
+    ).grid(row=row_idx, column=0, columnspan=2, sticky="w", padx=4, pady=(6, 2))
+
+    size_var = tk.StringVar(value=f"{_auto_follow_object_size_m:.2f}")
+    size_entry = tk.Entry(inner, textvariable=size_var, width=10, font=("Arial", 8))
+    size_entry.grid(row=row_idx, column=2, sticky="w", padx=(0, 4), pady=(6, 2))
+
+    def _apply_object_size(*_):
+        ok = set_detect_object_physical_size(size_var.get())
+        if ok:
+            size_var.set(f"{_auto_follow_object_size_m:.2f}")
+
+    tk.Button(
+        inner,
+        text="Aplicar",
+        font=("Arial", 8),
+        bg="#3b7ddd",
+        fg="white",
+        relief="flat",
+        padx=6,
+        pady=1,
+        command=_apply_object_size,
+    ).grid(row=row_idx, column=3, sticky="w", padx=2, pady=(6, 2))
+
+    size_entry.bind("<Return>", _apply_object_size)
+
+    row_idx += 1
+    tk.Label(
+        inner,
+        text="Ejemplo: persona ≈ 1.70m, móvil ≈ 17cm",
+        font=("Arial", 7),
+        fg="#666666",
+    ).grid(row=row_idx, column=0, columnspan=COLS, sticky="w", padx=4, pady=(0, 4))
+
     return df
 
 
@@ -2240,7 +2493,7 @@ def crear_ventana(modo):
     global client_dashboard, IS_GROUND_STATION, root_window
     global altShowLbl, headingShowLbl, stateShowLbl
     global speedShowLbl, battShowLbl, gpsShowLbl
-    global connectBtn, arm_takeOffBtn, landBtn, RTLBtn
+    global connectBtn, arm_takeOffBtn, landBtn, RTLBtn, followBtn
     global speedSldr, gradesSldr, previousBtn
 
     if modo == "global":
@@ -2343,6 +2596,7 @@ def crear_ventana(modo):
 
     connectBtn     = btn("Conectar",  _connect, 0)
     arm_takeOffBtn = btn("Despegar",  _takeoff, 1)
+    followBtn      = btn("Modo seguimiento", toggle_follow_mode, 2)
     landBtn        = btn("Aterrizar", _land,    5, col=0, cs=1)
     RTLBtn         = btn("RTL",       _RTL,     5, col=1, cs=1)
 
