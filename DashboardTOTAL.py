@@ -945,7 +945,7 @@ async def _cam_connect_peer(origen: str, mqtt_cam_client):
     mqtt_cam_client.publish(t_offer_peer, json.dumps({
         "sdp":  pc_peer.localDescription.sdp,
         "type": pc_peer.localDescription.type,
-    }), retain=True)
+    }), retain=False)
     print(f"[CAM:{origen}] Oferta publicada → {t_offer_peer}")
 
     try:
@@ -971,6 +971,9 @@ async def _cam_connect_peer(origen: str, mqtt_cam_client):
 
 async def _apply_answer_peer(pc_peer, data, event):
     try:
+        if pc_peer.signalingState == "stable":
+            print("[CAM] Peer ya estable — ignorando answer duplicada")
+            return
         await pc_peer.setRemoteDescription(
             RTCSessionDescription(sdp=data["sdp"], type=data["type"])
         )
@@ -1317,6 +1320,8 @@ def webrtc_thread_dashboard():
 
     def _on_offer(cli, userdata, msg):
         if msg.topic == t_my_offer and msg.payload:
+            if pc.connectionState in ("connecting", "connected"):
+                return
             try:
                 data = json.loads(msg.payload)
             except Exception:
@@ -1328,7 +1333,7 @@ def webrtc_thread_dashboard():
     client_dashboard.message_callback_add(t_my_offer, _on_offer)
     client_dashboard.subscribe(t_my_offer)
 
-    client_dashboard.publish(t_my_request, MY_ORIGIN, retain=True)
+    client_dashboard.publish(t_my_request, MY_ORIGIN, retain=False)
     print(f"[WebRTC] Solicitud enviada a {t_my_request} (payload={MY_ORIGIN})")
 
     async def _retry_request():
@@ -1337,7 +1342,7 @@ def webrtc_thread_dashboard():
             if pc.connectionState in ("connected", "connecting"):
                 break
             print(f"[WebRTC] Re-solicitud → {t_my_request}")
-            client_dashboard.publish(t_my_request, MY_ORIGIN, retain=True)
+            client_dashboard.publish(t_my_request, MY_ORIGIN, retain=False)
 
     asyncio.run_coroutine_threadsafe(_retry_request(), loop_dashboard)
     loop_dashboard.run_forever()
