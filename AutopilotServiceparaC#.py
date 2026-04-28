@@ -4,7 +4,12 @@
 
 import paho.mqtt.client as mqtt
 import json
+import time
 from dronLink.Dron import Dron
+from distance_follow_controller import DistanceFollowController
+
+
+distance_follow = None
 
 # esta función sirve para publicar los eventos resultantes de las acciones solicitadas
 def publish_event (event):
@@ -17,6 +22,75 @@ def publish_telemetry_info (telemetry_info):
     global sending_topic, client
     client.publish(sending_topic + '/telemetryInfo', json.dumps(telemetry_info))
 
+
+def publish_status(message, origin=None, **extra):
+    global sending_topic, client, dron
+    # When origin is provided (e.g. from DistanceFollowController's thread) build
+    # the topic directly so we don't depend on the mutable global sending_topic.
+    topic = ("autopilotServiceDemo/" + origin) if origin else sending_topic
+    payload = {
+        "timestamp": int(time.time()),
+        "level": "info",
+        "message": message,
+        "drone_state": getattr(dron, "state", "unknown"),
+    }
+    payload.update(extra)
+    client.publish(topic + '/status', json.dumps(payload))
+
+
+def publish_error(message, origin=None, **extra):
+    global sending_topic, client, dron
+    # When origin is provided (e.g. from DistanceFollowController's thread) build
+    # the topic directly so we don't depend on the mutable global sending_topic.
+    topic = ("autopilotServiceDemo/" + origin) if origin else sending_topic
+    payload = {
+        "timestamp": int(time.time()),
+        "message": message,
+        "drone_state": getattr(dron, "state", "unknown"),
+    }
+    payload.update(extra)
+    client.publish(topic + '/error', json.dumps(payload))
+
+
+def _parse_json_payload(payload_text):
+    if not payload_text:
+        return {}
+    data = json.loads(payload_text)
+    if not isinstance(data, dict):
+        raise ValueError("Se esperaba un objeto JSON")
+    return data
+
+
+def _follow_set_nav_speed(speed, origin):
+    dron.changeNavSpeed(float(speed))
+
+
+def _follow_set_direction(direction, origin):
+    dron.go(direction)
+
+
+def _follow_stop_direction(origin):
+    dron.go("Stop")
+
+
+def _is_drone_flying():
+    return dron.state == 'flying'
+
+
+def _ensure_follow_controller():
+    global distance_follow
+    if distance_follow is None:
+        distance_follow = DistanceFollowController(
+            set_nav_speed=_follow_set_nav_speed,
+            set_direction=_follow_set_direction,
+            stop_direction=_follow_stop_direction,
+            is_flying=_is_drone_flying,
+            publish_status=publish_status,
+            publish_error=publish_error,
+            control_hz=8.0,
+        )
+    return distance_follow
+
 def on_message(cli, userdata, message):
     global  sending_topic, client
     global dron
@@ -28,6 +102,7 @@ def on_message(cli, userdata, message):
     command = splited[2] # aqui tengo el comando
 
     sending_topic = "autopilotServiceDemo/" + origin # lo necesitaré para enviar las respuestas
+    follow_controller = _ensure_follow_controller()
 
     if command == 'connect':
         # decide between simulator and real drone based on payload
@@ -54,16 +129,22 @@ def on_message(cli, userdata, message):
 
     if command == 'go':
         if dron.state == 'flying':
+            if follow_controller.is_running():
+                follow_controller.stop(reason="manual-go", origin=origin)
             direction = message.payload.decode("utf-8")
             dron.go(direction)
 
     if command == 'Land':
         if dron.state == 'flying':
+            if follow_controller.is_running():
+                follow_controller.stop(reason="land", origin=origin)
             # operación no bloqueante. Cuando acabe publicará el evento correspondiente
             dron.Land(blocking=False, callback=publish_event, params='landed')
 
     if command == 'RTL':
         if dron.state == 'flying':
+            if follow_controller.is_running():
+                follow_controller.stop(reason="rtl", origin=origin)
             # operación no bloqueante. Cuando acabe publicará el evento correspondiente
             dron.RTL(blocking=False, callback=publish_event, params='atHome')
 
@@ -80,8 +161,47 @@ def on_message(cli, userdata, message):
         dron.changeHeading(heading)
     
     if command == 'changeNavSpeed':
+        if follow_controller.is_running():
+            follow_controller.stop(reason="manual-speed-change", origin=origin)
         speed = float(message.payload.decode("utf-8"))
         dron.changeNavSpeed(speed)
+
+    if command == 'startDistanceFollow':
+        if dron.state != 'flying':
+            publish_error("No se puede activar seguimiento: dron no esta en vuelo", command=command)
+            return
+        payload_text = message.payload.decode("utf-8").strip() if message.payload else ""
+        try:
+            cfg = _parse_json_payload(payload_text)
+        except Exception as e:
+            publish_error(f"Payload startDistanceFollow invalido: {e}", command=command, payload=payload_text)
+            return
+        follow_controller.start(origin=origin, config=cfg)
+        publish_status("Seguimiento por distancia activado", mode="distance-follow", config=follow_controller.snapshot_config())
+
+    if command == 'updateDistanceFollow':
+        if not follow_controller.is_running():
+            publish_status("updateDistanceFollow ignorado: seguimiento no activo", level="warning", command=command)
+            return
+        payload_text = message.payload.decode("utf-8").strip() if message.payload else ""
+        try:
+            obs = _parse_json_payload(payload_text)
+        except Exception as e:
+            publish_error(f"Payload updateDistanceFollow invalido: {e}", command=command, payload=payload_text)
+            return
+        if not follow_controller.update_observation(obs):
+            publish_error("Observacion de seguimiento invalida", command=command, payload=payload_text)
+
+    if command == 'stopDistanceFollow':
+        payload_text = message.payload.decode("utf-8").strip() if message.payload else ""
+        reason = "stop-request"
+        try:
+            data = _parse_json_payload(payload_text)
+            reason = str(data.get("reason", reason))
+        except Exception:
+            pass
+        follow_controller.stop(reason=reason, origin=origin)
+        publish_status("Seguimiento por distancia detenido", reason=reason)
     
     if command == 'changeAltitude':
         altitud = float(message.payload.decode("utf-8"))
