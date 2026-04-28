@@ -2434,7 +2434,7 @@ def _build_detection_panel(parent):
     row_idx += 1
     tk.Label(
         inner,
-        text="Deadzone lateral (m):",
+        text="Deadzone lateral (normalizada, 0-1):",
         font=("Arial", 8, "bold"),
         fg="#333333",
     ).grid(row=row_idx, column=0, columnspan=2, sticky="w", padx=4, pady=(2, 2))
