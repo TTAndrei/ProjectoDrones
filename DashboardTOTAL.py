@@ -11,8 +11,8 @@
 #mavproxy --master=com3 --out=udp:127.0.0.1:14550 --out=udp:127.0.0.1:14551
 # =====================================================
 
-import asyncio, json, ssl, threading, time, requests, sys
-import logging, warnings
+import asyncio, json, os, ssl, threading, time, requests, sys
+import logging, warnings, base64, math
 from datetime import datetime, timedelta
 
 # Silenciar FutureWarning de torch en YOLOv5
@@ -64,7 +64,9 @@ T_CAM_ANSWER  = "webrtc/answer"
 T_OFFER  = T_CAM_OFFER
 T_ANSWER = T_CAM_ANSWER
 T_AUTOPILOT_CLAIM = "autopilot/claim"
-T_SLOT_PREFIX = "slot/ocupado/"
+T_CRIME_ALERT     = "crime/alert"
+T_CRIME_CHUNK     = "crime/clip/chunk"
+T_SLOT_PREFIX     = "slot/ocupado/"
 
 TCP_HOST = "localhost"
 TCP_PORT = 9999
@@ -1582,6 +1584,63 @@ def on_mqtt_message_dashboard(cli, userdata, msg):
                 gpsShowLbl['text'] = 'sin GPS'
 
         _ui_call(_update_telemetry_ui)
+    elif topic == T_CRIME_ALERT:
+        try:
+            data = json.loads(msg.payload.decode())
+            _ui_call(_mostrar_alerta_crimen, data)
+        except Exception as e:
+            print(f"[CRIME] Error procesando alerta: {e}")
+
+    elif topic == f'{T_CRIME_CHUNK}/start':
+        try:
+            meta = json.loads(msg.payload.decode())
+            _crime_chunks_buffer[meta["crime_id"]] = {
+                "meta":   meta,
+                "chunks": {},
+                "score":  0.0,
+            }
+            print(f"[CRIME] Recibiendo clip #{meta['crime_id']} "
+                  f"({meta['total_chunks']} chunks, "
+                  f"{meta.get('size_bytes',0)/1024/1024:.2f} MB)")
+        except Exception as e:
+            print(f"[CRIME] Error chunk/start: {e}")
+
+    elif topic == T_CRIME_CHUNK:
+        try:
+            data     = json.loads(msg.payload.decode())
+            crime_id = data["crime_id"]
+            idx      = data["chunk_index"]
+            total    = data["total_chunks"]
+            if crime_id not in _crime_chunks_buffer:
+                _crime_chunks_buffer[crime_id] = {"meta": {}, "chunks": {}, "score": 0.0}
+            _crime_chunks_buffer[crime_id]["chunks"][idx] = data["data"]
+            print(f"  [CRIME] Chunk {idx+1}/{total}", end="\r")
+        except Exception as e:
+            print(f"[CRIME] Error chunk: {e}")
+
+    elif topic == f'{T_CRIME_CHUNK}/end':
+        try:
+            data     = json.loads(msg.payload.decode())
+            crime_id = data["crime_id"]
+            total    = data["total_chunks"]
+            buf      = _crime_chunks_buffer.get(crime_id, {})
+            chunks   = buf.get("chunks", {})
+            score    = buf.get("score", 0.0)
+            if len(chunks) == total:
+                b64 = "".join(chunks[i] for i in range(total))
+                raw = base64.b64decode(b64)
+                os.makedirs("clips", exist_ok=True)
+                clip_path = os.path.join("clips", f"recibido_{crime_id}.mp4")
+                with open(clip_path, "wb") as f:
+                    f.write(raw)
+                print(f"\n[CRIME] ✓ Clip reconstruido: {clip_path} "
+                      f"({len(raw)/1024/1024:.2f} MB)")
+                _crime_chunks_buffer.pop(crime_id, None)
+                _ui_call(_reproducir_clip_en_popup, crime_id, clip_path, score)
+            else:
+                print(f"\n[CRIME] ✗ Chunks incompletos: {len(chunks)}/{total}")
+        except Exception as e:
+            print(f"[CRIME] Error chunk/end: {e}")
     elif topic == f'autopilotServiceDemo/{MY_ORIGIN}/connected':
         _connect_attempt_token += 1
         _ui_call(_set_connected_btn)
@@ -1597,6 +1656,166 @@ def on_mqtt_message_dashboard(cli, userdata, msg):
         _ui_call(RTLBtn.configure, text='En tierra', fg='white', bg='green')
         _ui_call(arm_takeOffBtn.configure, text='Despegar', fg='black', bg='dark orange')
         _ui_call(landBtn.configure, text='Aterrizar', fg='black', bg='dark orange')
+
+
+# ── Lista de marcadores de crimen en el mapa ──────────────────────────────────
+_crime_markers       = []
+_crime_chunks_buffer = {}   # crime_id → {"meta": {}, "chunks": {}}
+_crime_popup_refs    = {}   # crime_id → popup de espera
+
+def _mostrar_alerta_crimen(data: dict):
+    """Popup de espera + marcador en el mapa. El clip llega después por chunks."""
+    global _crime_markers
+
+    crime_id  = data.get("crime_id", "?")
+    score     = data.get("crime_score", 0)
+    timestamp = data.get("timestamp", "")[:19].replace("T", " ")
+
+    # ── Marcador en el mapa ───────────────────────────────────────────────────
+    if map_widget and drone_lat is not None and drone_lon is not None:
+        def _add_marker():
+            m = map_widget.set_marker(
+                drone_lat, drone_lon,
+                text=f"🚨 Crimen #{crime_id}",
+                marker_color_circle="#e94560",
+                marker_color_outside="#8b0000",
+                font=("Arial", 8, "bold"),
+            )
+            _crime_markers.append(m)
+        map_widget.after(0, _add_marker)
+
+    # ── Popup de espera mientras llega el clip ────────────────────────────────
+    popup = tk.Toplevel()
+    popup.title(f"🚨 ALERTA DE CRIMEN — #{crime_id}")
+    popup.configure(bg="#212121")
+    popup.attributes("-topmost", True)
+    popup.resizable(False, False)
+    w, h = 500, 200
+    popup.geometry(f"{w}x{h}+{(popup.winfo_screenwidth()-w)//2}+"
+                   f"{(popup.winfo_screenheight()-h)//2}")
+
+    tk.Label(popup, text="🚨  POSIBLE CRIMEN DETECTADO",
+             font=("Arial", 13, "bold"),
+             bg="#e94560", fg="white", pady=10).pack(fill="x")
+    tk.Label(popup,
+             text=f"ID: #{crime_id}   |   Score: {score:.1%}   |   {timestamp}",
+             font=("Arial", 9), bg="#212121", fg="#aaaaaa", pady=6).pack()
+    tk.Label(popup, text="⏳ Recibiendo clip del Analizador...",
+             font=("Arial", 10), bg="#212121", fg="white").pack(pady=12)
+
+    _crime_popup_refs[crime_id] = popup
+    print(f"[CRIME] Alerta #{crime_id} recibida (score={score:.1%}) — esperando clip...")
+
+
+def _reproducir_clip_en_popup(crime_id: int, clip_path: str, score: float):
+    """Cierra el popup de espera y abre el popup con el vídeo."""
+    # Cerrar popup de espera
+    popup_espera = _crime_popup_refs.pop(crime_id, None)
+    if popup_espera:
+        try:
+            popup_espera.destroy()
+        except Exception:
+            pass
+
+    popup = tk.Toplevel()
+    popup.title(f"🚨 Crimen #{crime_id} — Clip recibido")
+    popup.configure(bg="#212121")
+    popup.attributes("-topmost", True)
+    popup.resizable(False, False)
+    w, h = 640, 560
+    popup.geometry(f"{w}x{h}+{(popup.winfo_screenwidth()-w)//2}+"
+                   f"{(popup.winfo_screenheight()-h)//2}")
+
+    tk.Label(popup, text=f"🚨  CRIMEN #{crime_id}  —  Score: {score:.1%}",
+             font=("Arial", 13, "bold"),
+             bg="#e94560", fg="white", pady=8).pack(fill="x")
+
+    video_lbl  = tk.Label(popup, bg="#000000", width=620, height=360)
+    video_lbl.pack(padx=10, pady=6)
+
+    status_lbl = tk.Label(popup, text="Reproduciendo...",
+                           font=("Arial", 9), bg="#212121", fg="#aaaaaa")
+    status_lbl.pack()
+
+    btn_f = tk.Frame(popup, bg="#212121")
+    btn_f.pack(fill="x", padx=20, pady=8)
+
+    def _confirmar():
+        _actualizar_confirmacion(crime_id, 1)
+        status_lbl.config(text="✓ Confirmado como crimen", fg="#4caf50")
+        cb.config(state="disabled"); db.config(state="disabled")
+
+    def _descartar():
+        _actualizar_confirmacion(crime_id, 0)
+        status_lbl.config(text="✗ Marcado como falso positivo", fg="#aaaaaa")
+        cb.config(state="disabled"); db.config(state="disabled")
+
+    cb = tk.Button(btn_f, text="✓ Confirmar crimen",
+                   font=("Arial", 10, "bold"), bg="#e94560", fg="white",
+                   relief="flat", padx=16, pady=8, cursor="hand2",
+                   command=_confirmar)
+    cb.pack(side="left", expand=True, fill="x", padx=4)
+
+    db = tk.Button(btn_f, text="✗ Falso positivo",
+                   font=("Arial", 10, "bold"), bg="#424242", fg="white",
+                   relief="flat", padx=16, pady=8, cursor="hand2",
+                   command=_descartar)
+    db.pack(side="right", expand=True, fill="x", padx=4)
+
+    def _play():
+        cap = cv2.VideoCapture(clip_path)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                continue
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame = cv2.resize(frame, (620, 350))
+            try:
+                from PIL import Image, ImageTk
+                img = ImageTk.PhotoImage(Image.fromarray(frame))
+                try:
+                    if popup.winfo_exists():
+                        popup.after(0, lambda i=img: _upd(i))
+                except Exception:
+                    break
+            except Exception:
+                break
+            time.sleep(1 / fps)
+        cap.release()
+
+    def _upd(img):
+        try:
+            if popup.winfo_exists():
+                video_lbl.config(image=img)
+                video_lbl.image = img
+                status_lbl.config(
+                    text=f"Reproduciendo — Score: {score:.1%}",
+                    fg="#4caf50")
+        except Exception:
+            pass
+
+    threading.Thread(target=_play, daemon=True).start()
+
+
+def _actualizar_confirmacion(crime_id: int, confirmado: int):
+    """Actualiza el campo confirmed en la base de datos del Analizador."""
+    import sqlite3
+    db_path = "crimes.db"
+    if not os.path.exists(db_path):
+        print(f"[CRIME] Base de datos no encontrada: {db_path}")
+        return
+    try:
+        con = sqlite3.connect(db_path)
+        con.execute("UPDATE crimes SET confirmed=? WHERE id=?",
+                    (confirmado, crime_id))
+        con.commit()
+        con.close()
+        estado = "confirmado" if confirmado else "falso positivo"
+        print(f"[CRIME] Crimen #{crime_id} marcado como {estado}")
+    except Exception as e:
+        print(f"[CRIME] Error actualizando DB: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2028,7 +2247,11 @@ def crear_ventana(modo):
         client_dashboard.on_message = on_mqtt_message_dashboard
         client_dashboard.on_connect = lambda c,u,f,rc: (
             print("[MQTT] Dashboard conectado" if rc==0 else f"[MQTT] Error {rc}"),
-            c.subscribe(f'autopilotServiceDemo/{MY_ORIGIN}/#') if rc==0 else None
+            c.subscribe(f'autopilotServiceDemo/{MY_ORIGIN}/#') if rc==0 else None,
+            c.subscribe(T_CRIME_ALERT) if rc==0 else None,
+            c.subscribe(T_CRIME_CHUNK) if rc==0 else None,
+            c.subscribe(f'{T_CRIME_CHUNK}/start') if rc==0 else None,
+            c.subscribe(f'{T_CRIME_CHUNK}/end') if rc==0 else None
         )
         client_dashboard.on_disconnect = lambda c,u,rc: (
             print(f"[MQTT] Dashboard desconectado (rc={rc}) — paho reconectará automáticamente")
@@ -2036,6 +2259,10 @@ def crear_ventana(modo):
         )
         client_dashboard.connect(BROKER_DASHBOARD, PORT, keepalive=30)
         client_dashboard.subscribe(f'autopilotServiceDemo/{MY_ORIGIN}/#')
+        client_dashboard.subscribe(T_CRIME_ALERT)
+        client_dashboard.subscribe(T_CRIME_CHUNK)
+        client_dashboard.subscribe(f'{T_CRIME_CHUNK}/start')
+        client_dashboard.subscribe(f'{T_CRIME_CHUNK}/end')
         client_dashboard.reconnect_delay_set(min_delay=1, max_delay=30)
         client_dashboard.loop_start()
         _start_telemetry_watchdog_global()
