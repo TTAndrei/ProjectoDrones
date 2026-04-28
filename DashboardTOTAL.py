@@ -11,8 +11,8 @@
 #mavproxy --master=com3 --out=udp:127.0.0.1:14550 --out=udp:127.0.0.1:14551
 # =====================================================
 
-import asyncio, json, ssl, threading, time, requests, sys
-import logging, warnings, math
+import asyncio, json, os, ssl, threading, time, requests, sys
+import logging, warnings, base64, math
 from datetime import datetime, timedelta
 
 # Silenciar FutureWarning de torch en YOLOv5
@@ -51,6 +51,13 @@ HIVEMQ_USERS = [
 USER_AUTOPILOT = "autopilotServiceDemo"
 PASS_AUTOPILOT = "qkdb!LasqvHfy9V"
 
+# Credenciales compartidas para el canal WebRTC (CameraService + todos los clientes).
+# Siempre usamos el slot 0 (InterfazGlobal) para que CameraService y clientes
+# puedan publicar/suscribirse a los topics webrtc/* con el mismo usuario,
+# evitando bloqueos de ACL entre distintos usuarios HiveMQ.
+USER_WEBRTC = HIVEMQ_USERS[0]["user"]
+PASS_WEBRTC = HIVEMQ_USERS[0]["password"]
+
 T_CAM_REQUEST = "webrtc/request"
 T_CAM_OFFER   = "webrtc/offer"
 T_CAM_ANSWER  = "webrtc/answer"
@@ -58,7 +65,9 @@ T_CAM_ANSWER  = "webrtc/answer"
 T_OFFER  = T_CAM_OFFER
 T_ANSWER = T_CAM_ANSWER
 T_AUTOPILOT_CLAIM = "autopilot/claim"
-T_SLOT_PREFIX = "slot/ocupado/"
+T_CRIME_ALERT     = "crime/alert"
+T_CRIME_CHUNK     = "crime/clip/chunk"
+T_SLOT_PREFIX     = "slot/ocupado/"
 
 TCP_HOST = "localhost"
 TCP_PORT = 9999
@@ -1043,25 +1052,53 @@ class CameraTrack(VideoStreamTrack):
             pass
         super().stop()
 
+# Servidores TURN públicos de Open Relay (sin cuenta, siempre disponibles).
+# Se usan como base garantizada; Metered se añade encima si funciona.
+_OPEN_RELAY_SERVERS = [
+    RTCIceServer(
+        urls=["turn:openrelay.metered.ca:80",
+              "turn:openrelay.metered.ca:443",
+              "turn:openrelay.metered.ca:443?transport=tcp",
+              "turns:openrelay.metered.ca:443"],
+        username="openrelayproject",
+        credential="openrelayproject",
+    ),
+    RTCIceServer(urls=["stun:stun.l.google.com:19302",
+                       "stun:stun1.l.google.com:19302"]),
+]
+
+
 def get_ice_config():
     print("[ICE] Obteniendo credenciales TURN de Metered...")
+    ice_servers = list(_OPEN_RELAY_SERVERS)   # base siempre presente
+
     try:
-        servers = requests.get(METERED_API, timeout=10).json()
-        print(f"[ICE] {len(servers)} servidores:")
-        ice_servers = []
-        for s in servers:
-            urls = s.get("urls")
-            if isinstance(urls, str): urls = [urls]
-            u, c = s.get("username"), s.get("credential")
-            print(f"  {urls[0]}")
-            if u and c:
-                ice_servers.append(RTCIceServer(urls=urls, username=u, credential=c))
+        resp = requests.get(METERED_API, timeout=8)
+        if resp.status_code != 200:
+            print(f"[ICE] Metered API devuelvió {resp.status_code} — usando Open Relay")
+        else:
+            servers = resp.json()
+            metered_servers = []
+            for s in servers:
+                urls = s.get("urls")
+                if isinstance(urls, str):
+                    urls = [urls]
+                u, c = s.get("username"), s.get("credential")
+                if u and c:
+                    metered_servers.append(
+                        RTCIceServer(urls=urls, username=u, credential=c)
+                    )
+            if metered_servers:
+                ice_servers = metered_servers + ice_servers
+                print(f"[ICE] {len(metered_servers)} servidores Metered + Open Relay de respaldo:")
             else:
-                ice_servers.append(RTCIceServer(urls=urls))
-        return RTCConfiguration(iceServers=ice_servers)
+                print("[ICE] Metered no devolvió servidores con credenciales — usando Open Relay")
+            for srv in ice_servers[:3]:
+                print(f"  {srv.urls[0]}")
     except Exception as e:
-        print(f"[ICE] Error: {e} — usando STUN de respaldo")
-        return RTCConfiguration(iceServers=[RTCIceServer(urls="stun:stun.l.google.com:19302")])
+        print(f"[ICE] Error contactando Metered ({e}) — usando Open Relay")
+
+    return RTCConfiguration(iceServers=ice_servers)
 
 
 def _silence_aioice_handler(loop, context):
@@ -1111,15 +1148,29 @@ async def _cam_connect_peer(origen: str, mqtt_cam_client):
     mqtt_cam_client.subscribe(t_answer_peer)
 
     await pc_peer.setLocalDescription(await pc_peer.createOffer())
-    print(f"[CAM:{origen}] Esperando ICE gathering...")
-    while pc_peer.iceGatheringState != "complete":
-        await asyncio.sleep(0.2)
+
+    # Esperar gathering con evento (no polling) — garantiza candidatos TURN/relay
+    print(f"[CAM:{origen}] Esperando ICE gathering (máx 8 s)...")
+    cam_gathering_done = asyncio.Event()
+
+    @pc_peer.on("icegatheringstatechange")
+    def _on_cam_gathering():
+        if pc_peer.iceGatheringState == "complete":
+            cam_gathering_done.set()
+
+    if pc_peer.iceGatheringState == "complete":
+        cam_gathering_done.set()
+
+    try:
+        await asyncio.wait_for(cam_gathering_done.wait(), timeout=8.0)
+    except asyncio.TimeoutError:
+        print(f"[CAM:{origen}] ICE gathering timeout (8 s) — usando candidatos disponibles")
 
     candidates = [l for l in pc_peer.localDescription.sdp.splitlines()
                   if l.startswith("a=candidate")]
     has_relay = any("relay" in c for c in candidates)
-    print(f"[CAM:{origen}] {len(candidates)} candidates — "
-          f"{'✓ relay' if has_relay else '⚠ sin relay'}")
+    print(f"[CAM:{origen}] {len(candidates)} candidatos — "
+          f"{'\u2713 relay' if has_relay else '\u26a0 sin relay'}")
 
     mqtt_cam_client.publish(t_offer_peer, json.dumps({
         "sdp":  pc_peer.localDescription.sdp,
@@ -1193,14 +1244,12 @@ async def run_camera_global(mqtt_cam_client):
             payload = msg.payload.decode("utf-8").strip()
             if not payload:
                 return
-            import json as _json
-            ids = _normalize_detect_ids(_json.loads(payload))
+            ids = _normalize_detect_ids(json.loads(payload))
             detect_object_ids.clear()
             detect_object_ids.update(ids)
             print(f"[COCO] Clases activas desde C#: {sorted(detect_object_ids)}")
             if ids and yolo_model is None:
-                import threading as _threading
-                _threading.Thread(target=load_yolo, daemon=True).start()
+                threading.Thread(target=load_yolo, daemon=True).start()
         except Exception as e:
             print(f"[COCO] Error parseando detectClasses: {e}")
 
@@ -1241,6 +1290,10 @@ async def run_camera_global(mqtt_cam_client):
 def start_camera_service_global():
     global camera_service_mode, camera_service_running
 
+    if USER_DASHBOARD is None or PASS_DASHBOARD is None:
+        print("[CAM] ERROR: credenciales HiveMQ no asignadas — seleccionar_slot() debe ejecutarse primero")
+        return
+
     if camera_service_running:
         print("[CAM] CameraService ya está activo")
         return
@@ -1253,7 +1306,7 @@ def start_camera_service_global():
             cam_client = mqtt.Client(client_id=f"CameraService_{_INST_SUFFIX}", transport="websockets")
             cam_client.ws_set_options(path="/mqtt")
             cam_client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
-            cam_client.username_pw_set(USER_DASHBOARD, PASS_DASHBOARD)
+            cam_client.username_pw_set(USER_WEBRTC, PASS_WEBRTC)
             cam_client.connect(BROKER_DASHBOARD, PORT)
             cam_client.loop_start()
 
@@ -1698,6 +1751,25 @@ def webrtc_thread_dashboard():
     t_my_answer  = f"{T_CAM_ANSWER}/{MY_ORIGIN}"
     t_my_request = T_CAM_REQUEST
 
+    # Cliente MQTT dedicado para la señalización WebRTC.
+    # Usa USER_WEBRTC (slot 0 / InterfazGlobal) igual que el CameraService,
+    # garantizando que ambos extremos comparten el mismo usuario HiveMQ y
+    # no hay bloqueos de ACL al publicar/recibir en los topics webrtc/*.
+    import uuid as _uuid_webrtc
+    webrtc_mqtt = mqtt.Client(
+        client_id=f"WebRTCDash_{_uuid_webrtc.uuid4().hex[:6]}",
+        transport="websockets"
+    )
+    webrtc_mqtt.ws_set_options(path="/mqtt")
+    webrtc_mqtt.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
+    webrtc_mqtt.username_pw_set(USER_WEBRTC, PASS_WEBRTC)
+    try:
+        webrtc_mqtt.connect(BROKER_DASHBOARD, PORT, keepalive=30)
+    except Exception as e:
+        print(f"[WebRTC] Error conectando cliente MQTT de señalización: {e}")
+        return
+    webrtc_mqtt.loop_start()
+
     def _on_offer(cli, userdata, msg):
         if msg.topic == t_my_offer and msg.payload:
             try:
@@ -1706,12 +1778,12 @@ def webrtc_thread_dashboard():
                 return
             print(f"[SIG] Oferta recibida en {t_my_offer}")
             asyncio.run_coroutine_threadsafe(
-                handle_offer_dashboard(data, t_my_answer), loop_dashboard)
+                handle_offer_dashboard(data, t_my_answer, webrtc_mqtt), loop_dashboard)
 
-    client_dashboard.message_callback_add(t_my_offer, _on_offer)
-    client_dashboard.subscribe(t_my_offer)
+    webrtc_mqtt.message_callback_add(t_my_offer, _on_offer)
+    webrtc_mqtt.subscribe(t_my_offer)
 
-    client_dashboard.publish(t_my_request, MY_ORIGIN, retain=True)
+    webrtc_mqtt.publish(t_my_request, MY_ORIGIN, retain=True)
     print(f"[WebRTC] Solicitud enviada a {t_my_request} (payload={MY_ORIGIN})")
 
     async def _retry_request():
@@ -1720,10 +1792,17 @@ def webrtc_thread_dashboard():
             if pc.connectionState in ("connected", "connecting"):
                 break
             print(f"[WebRTC] Re-solicitud → {t_my_request}")
-            client_dashboard.publish(t_my_request, MY_ORIGIN, retain=True)
+            webrtc_mqtt.publish(t_my_request, MY_ORIGIN, retain=True)
 
     asyncio.run_coroutine_threadsafe(_retry_request(), loop_dashboard)
     loop_dashboard.run_forever()
+
+    # Limpiar cliente WebRTC al salir
+    try:
+        webrtc_mqtt.loop_stop()
+        webrtc_mqtt.disconnect()
+    except Exception:
+        pass
 
 
 async def webrtc_receive_local():
@@ -1810,23 +1889,41 @@ def webrtc_thread_dashboard_local():
         print(f"[VIDEO] Hilo local terminó: {e}")
 
 
-async def handle_offer_dashboard(data, t_answer: str):
+async def handle_offer_dashboard(data, t_answer: str, webrtc_mqtt=None):
     await pc.setRemoteDescription(
         RTCSessionDescription(sdp=data["sdp"], type=data["type"])
     )
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
 
-    print("[WebRTC] Esperando ICE gathering...")
-    while pc.iceGatheringState != "complete":
-        await asyncio.sleep(0.2)
+    # Esperar a que el ICE gathering termine usando un evento en lugar de polling.
+    # Esto garantiza que los candidatos TURN/relay tienen tiempo de llegar antes
+    # de enviar la answer. Timeout de 8 s para no bloquear indefinidamente.
+    print("[WebRTC] Esperando ICE gathering (máx 8 s)...")
+    gathering_done = asyncio.Event()
+
+    @pc.on("icegatheringstatechange")
+    def _on_gathering():
+        if pc.iceGatheringState == "complete":
+            gathering_done.set()
+
+    # Por si ya estaba complete antes de registrar el handler
+    if pc.iceGatheringState == "complete":
+        gathering_done.set()
+
+    try:
+        await asyncio.wait_for(gathering_done.wait(), timeout=8.0)
+    except asyncio.TimeoutError:
+        print("[WebRTC] ICE gathering timeout (8 s) — enviando con candidatos disponibles")
 
     candidates = [l for l in pc.localDescription.sdp.splitlines()
                   if l.startswith("a=candidate")]
     has_relay = any("relay" in c for c in candidates)
-    print(f"[WebRTC] Answer lista — {'✓ relay' if has_relay else '⚠ sin relay'}")
+    print(f"[WebRTC] Answer lista — {'✓ relay' if has_relay else '⚠ sin relay'} ({len(candidates)} candidatos)")
 
-    client_dashboard.publish(t_answer, json.dumps({
+    # Usar el cliente WebRTC dedicado si está disponible, sino client_dashboard
+    publisher = webrtc_mqtt if webrtc_mqtt is not None else client_dashboard
+    publisher.publish(t_answer, json.dumps({
         "sdp":  pc.localDescription.sdp,
         "type": pc.localDescription.type,
     }))
@@ -1884,6 +1981,63 @@ def on_mqtt_message_dashboard(cli, userdata, msg):
                 gpsShowLbl['text'] = 'sin GPS'
 
         _ui_call(_update_telemetry_ui)
+    elif topic == T_CRIME_ALERT:
+        try:
+            data = json.loads(msg.payload.decode())
+            _ui_call(_mostrar_alerta_crimen, data)
+        except Exception as e:
+            print(f"[CRIME] Error procesando alerta: {e}")
+
+    elif topic == f'{T_CRIME_CHUNK}/start':
+        try:
+            meta = json.loads(msg.payload.decode())
+            _crime_chunks_buffer[meta["crime_id"]] = {
+                "meta":   meta,
+                "chunks": {},
+                "score":  0.0,
+            }
+            print(f"[CRIME] Recibiendo clip #{meta['crime_id']} "
+                  f"({meta['total_chunks']} chunks, "
+                  f"{meta.get('size_bytes',0)/1024/1024:.2f} MB)")
+        except Exception as e:
+            print(f"[CRIME] Error chunk/start: {e}")
+
+    elif topic == T_CRIME_CHUNK:
+        try:
+            data     = json.loads(msg.payload.decode())
+            crime_id = data["crime_id"]
+            idx      = data["chunk_index"]
+            total    = data["total_chunks"]
+            if crime_id not in _crime_chunks_buffer:
+                _crime_chunks_buffer[crime_id] = {"meta": {}, "chunks": {}, "score": 0.0}
+            _crime_chunks_buffer[crime_id]["chunks"][idx] = data["data"]
+            print(f"  [CRIME] Chunk {idx+1}/{total}", end="\r")
+        except Exception as e:
+            print(f"[CRIME] Error chunk: {e}")
+
+    elif topic == f'{T_CRIME_CHUNK}/end':
+        try:
+            data     = json.loads(msg.payload.decode())
+            crime_id = data["crime_id"]
+            total    = data["total_chunks"]
+            buf      = _crime_chunks_buffer.get(crime_id, {})
+            chunks   = buf.get("chunks", {})
+            score    = buf.get("score", 0.0)
+            if len(chunks) == total:
+                b64 = "".join(chunks[i] for i in range(total))
+                raw = base64.b64decode(b64)
+                os.makedirs("clips", exist_ok=True)
+                clip_path = os.path.join("clips", f"recibido_{crime_id}.mp4")
+                with open(clip_path, "wb") as f:
+                    f.write(raw)
+                print(f"\n[CRIME] ✓ Clip reconstruido: {clip_path} "
+                      f"({len(raw)/1024/1024:.2f} MB)")
+                _crime_chunks_buffer.pop(crime_id, None)
+                _ui_call(_reproducir_clip_en_popup, crime_id, clip_path, score)
+            else:
+                print(f"\n[CRIME] ✗ Chunks incompletos: {len(chunks)}/{total}")
+        except Exception as e:
+            print(f"[CRIME] Error chunk/end: {e}")
     elif topic == f'autopilotServiceDemo/{MY_ORIGIN}/connected':
         _connect_attempt_token += 1
         _ui_call(_set_connected_btn)
@@ -1899,6 +2053,166 @@ def on_mqtt_message_dashboard(cli, userdata, msg):
         _ui_call(RTLBtn.configure, text='En tierra', fg='white', bg='green')
         _ui_call(arm_takeOffBtn.configure, text='Despegar', fg='black', bg='dark orange')
         _ui_call(landBtn.configure, text='Aterrizar', fg='black', bg='dark orange')
+
+
+# ── Lista de marcadores de crimen en el mapa ──────────────────────────────────
+_crime_markers       = []
+_crime_chunks_buffer = {}   # crime_id → {"meta": {}, "chunks": {}}
+_crime_popup_refs    = {}   # crime_id → popup de espera
+
+def _mostrar_alerta_crimen(data: dict):
+    """Popup de espera + marcador en el mapa. El clip llega después por chunks."""
+    global _crime_markers
+
+    crime_id  = data.get("crime_id", "?")
+    score     = data.get("crime_score", 0)
+    timestamp = data.get("timestamp", "")[:19].replace("T", " ")
+
+    # ── Marcador en el mapa ───────────────────────────────────────────────────
+    if map_widget and drone_lat is not None and drone_lon is not None:
+        def _add_marker():
+            m = map_widget.set_marker(
+                drone_lat, drone_lon,
+                text=f"🚨 Crimen #{crime_id}",
+                marker_color_circle="#e94560",
+                marker_color_outside="#8b0000",
+                font=("Arial", 8, "bold"),
+            )
+            _crime_markers.append(m)
+        map_widget.after(0, _add_marker)
+
+    # ── Popup de espera mientras llega el clip ────────────────────────────────
+    popup = tk.Toplevel()
+    popup.title(f"🚨 ALERTA DE CRIMEN — #{crime_id}")
+    popup.configure(bg="#212121")
+    popup.attributes("-topmost", True)
+    popup.resizable(False, False)
+    w, h = 500, 200
+    popup.geometry(f"{w}x{h}+{(popup.winfo_screenwidth()-w)//2}+"
+                   f"{(popup.winfo_screenheight()-h)//2}")
+
+    tk.Label(popup, text="🚨  POSIBLE CRIMEN DETECTADO",
+             font=("Arial", 13, "bold"),
+             bg="#e94560", fg="white", pady=10).pack(fill="x")
+    tk.Label(popup,
+             text=f"ID: #{crime_id}   |   Score: {score:.1%}   |   {timestamp}",
+             font=("Arial", 9), bg="#212121", fg="#aaaaaa", pady=6).pack()
+    tk.Label(popup, text="⏳ Recibiendo clip del Analizador...",
+             font=("Arial", 10), bg="#212121", fg="white").pack(pady=12)
+
+    _crime_popup_refs[crime_id] = popup
+    print(f"[CRIME] Alerta #{crime_id} recibida (score={score:.1%}) — esperando clip...")
+
+
+def _reproducir_clip_en_popup(crime_id: int, clip_path: str, score: float):
+    """Cierra el popup de espera y abre el popup con el vídeo."""
+    # Cerrar popup de espera
+    popup_espera = _crime_popup_refs.pop(crime_id, None)
+    if popup_espera:
+        try:
+            popup_espera.destroy()
+        except Exception:
+            pass
+
+    popup = tk.Toplevel()
+    popup.title(f"🚨 Crimen #{crime_id} — Clip recibido")
+    popup.configure(bg="#212121")
+    popup.attributes("-topmost", True)
+    popup.resizable(False, False)
+    w, h = 640, 560
+    popup.geometry(f"{w}x{h}+{(popup.winfo_screenwidth()-w)//2}+"
+                   f"{(popup.winfo_screenheight()-h)//2}")
+
+    tk.Label(popup, text=f"🚨  CRIMEN #{crime_id}  —  Score: {score:.1%}",
+             font=("Arial", 13, "bold"),
+             bg="#e94560", fg="white", pady=8).pack(fill="x")
+
+    video_lbl  = tk.Label(popup, bg="#000000", width=620, height=360)
+    video_lbl.pack(padx=10, pady=6)
+
+    status_lbl = tk.Label(popup, text="Reproduciendo...",
+                           font=("Arial", 9), bg="#212121", fg="#aaaaaa")
+    status_lbl.pack()
+
+    btn_f = tk.Frame(popup, bg="#212121")
+    btn_f.pack(fill="x", padx=20, pady=8)
+
+    def _confirmar():
+        _actualizar_confirmacion(crime_id, 1)
+        status_lbl.config(text="✓ Confirmado como crimen", fg="#4caf50")
+        cb.config(state="disabled"); db.config(state="disabled")
+
+    def _descartar():
+        _actualizar_confirmacion(crime_id, 0)
+        status_lbl.config(text="✗ Marcado como falso positivo", fg="#aaaaaa")
+        cb.config(state="disabled"); db.config(state="disabled")
+
+    cb = tk.Button(btn_f, text="✓ Confirmar crimen",
+                   font=("Arial", 10, "bold"), bg="#e94560", fg="white",
+                   relief="flat", padx=16, pady=8, cursor="hand2",
+                   command=_confirmar)
+    cb.pack(side="left", expand=True, fill="x", padx=4)
+
+    db = tk.Button(btn_f, text="✗ Falso positivo",
+                   font=("Arial", 10, "bold"), bg="#424242", fg="white",
+                   relief="flat", padx=16, pady=8, cursor="hand2",
+                   command=_descartar)
+    db.pack(side="right", expand=True, fill="x", padx=4)
+
+    def _play():
+        cap = cv2.VideoCapture(clip_path)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                continue
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame = cv2.resize(frame, (620, 350))
+            try:
+                from PIL import Image, ImageTk
+                img = ImageTk.PhotoImage(Image.fromarray(frame))
+                try:
+                    if popup.winfo_exists():
+                        popup.after(0, lambda i=img: _upd(i))
+                except Exception:
+                    break
+            except Exception:
+                break
+            time.sleep(1 / fps)
+        cap.release()
+
+    def _upd(img):
+        try:
+            if popup.winfo_exists():
+                video_lbl.config(image=img)
+                video_lbl.image = img
+                status_lbl.config(
+                    text=f"Reproduciendo — Score: {score:.1%}",
+                    fg="#4caf50")
+        except Exception:
+            pass
+
+    threading.Thread(target=_play, daemon=True).start()
+
+
+def _actualizar_confirmacion(crime_id: int, confirmado: int):
+    """Actualiza el campo confirmed en la base de datos del Analizador."""
+    import sqlite3
+    db_path = "crimes.db"
+    if not os.path.exists(db_path):
+        print(f"[CRIME] Base de datos no encontrada: {db_path}")
+        return
+    try:
+        con = sqlite3.connect(db_path)
+        con.execute("UPDATE crimes SET confirmed=? WHERE id=?",
+                    (confirmado, crime_id))
+        con.commit()
+        con.close()
+        estado = "confirmado" if confirmado else "falso positivo"
+        print(f"[CRIME] Crimen #{crime_id} marcado como {estado}")
+    except Exception as e:
+        print(f"[CRIME] Error actualizando DB: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2519,7 +2833,11 @@ def crear_ventana(modo):
         client_dashboard.on_message = on_mqtt_message_dashboard
         client_dashboard.on_connect = lambda c,u,f,rc: (
             print("[MQTT] Dashboard conectado" if rc==0 else f"[MQTT] Error {rc}"),
-            c.subscribe(f'autopilotServiceDemo/{MY_ORIGIN}/#') if rc==0 else None
+            c.subscribe(f'autopilotServiceDemo/{MY_ORIGIN}/#') if rc==0 else None,
+            c.subscribe(T_CRIME_ALERT) if rc==0 else None,
+            c.subscribe(T_CRIME_CHUNK) if rc==0 else None,
+            c.subscribe(f'{T_CRIME_CHUNK}/start') if rc==0 else None,
+            c.subscribe(f'{T_CRIME_CHUNK}/end') if rc==0 else None
         )
         client_dashboard.on_disconnect = lambda c,u,rc: (
             print(f"[MQTT] Dashboard desconectado (rc={rc}) — paho reconectará automáticamente")
@@ -2527,6 +2845,10 @@ def crear_ventana(modo):
         )
         client_dashboard.connect(BROKER_DASHBOARD, PORT, keepalive=30)
         client_dashboard.subscribe(f'autopilotServiceDemo/{MY_ORIGIN}/#')
+        client_dashboard.subscribe(T_CRIME_ALERT)
+        client_dashboard.subscribe(T_CRIME_CHUNK)
+        client_dashboard.subscribe(f'{T_CRIME_CHUNK}/start')
+        client_dashboard.subscribe(f'{T_CRIME_CHUNK}/end')
         client_dashboard.reconnect_delay_set(min_delay=1, max_delay=30)
         client_dashboard.loop_start()
         _start_telemetry_watchdog_global()
