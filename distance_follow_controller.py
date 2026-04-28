@@ -70,6 +70,10 @@ class DistanceFollowController:
             self._last_direction = None
             self._last_speed = None
             self._last_lost_report_ts = 0.0
+            # Clear any stale observation so the loop waits for a fresh measurement
+            # before issuing motion commands.
+            self._observation = None
+            self._last_obs_ts = 0.0
             if self._thread is None or not self._thread.is_alive():
                 self._thread = threading.Thread(target=self._loop, daemon=True)
                 self._thread.start()

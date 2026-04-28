@@ -23,8 +23,11 @@ def publish_telemetry_info (telemetry_info):
     client.publish(sending_topic + '/telemetryInfo', json.dumps(telemetry_info))
 
 
-def publish_status(message, **extra):
+def publish_status(message, origin=None, **extra):
     global sending_topic, client, dron
+    # When origin is provided (e.g. from DistanceFollowController's thread) build
+    # the topic directly so we don't depend on the mutable global sending_topic.
+    topic = ("autopilotServiceDemo/" + origin) if origin else sending_topic
     payload = {
         "timestamp": int(time.time()),
         "level": "info",
@@ -32,18 +35,21 @@ def publish_status(message, **extra):
         "drone_state": getattr(dron, "state", "unknown"),
     }
     payload.update(extra)
-    client.publish(sending_topic + '/status', json.dumps(payload))
+    client.publish(topic + '/status', json.dumps(payload))
 
 
-def publish_error(message, **extra):
+def publish_error(message, origin=None, **extra):
     global sending_topic, client, dron
+    # When origin is provided (e.g. from DistanceFollowController's thread) build
+    # the topic directly so we don't depend on the mutable global sending_topic.
+    topic = ("autopilotServiceDemo/" + origin) if origin else sending_topic
     payload = {
         "timestamp": int(time.time()),
         "message": message,
         "drone_state": getattr(dron, "state", "unknown"),
     }
     payload.update(extra)
-    client.publish(sending_topic + '/error', json.dumps(payload))
+    client.publish(topic + '/error', json.dumps(payload))
 
 
 def _parse_json_payload(payload_text):
@@ -79,8 +85,8 @@ def _ensure_follow_controller():
             set_direction=_follow_set_direction,
             stop_direction=_follow_stop_direction,
             is_flying=_is_drone_flying,
-            publish_status=lambda msg, origin=None, **extra: publish_status(msg, **extra),
-            publish_error=lambda msg, origin=None, **extra: publish_error(msg, **extra),
+            publish_status=publish_status,
+            publish_error=publish_error,
             control_hz=8.0,
         )
     return distance_follow
