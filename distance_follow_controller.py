@@ -86,6 +86,13 @@ class DistanceFollowController:
             self._running = False
             target_origin = origin or self._origin
 
+        # Wait for the loop thread to finish all in-flight motion commands before
+        # issuing the final stop, preventing interleaved drone commands.
+        # Skip the join when called from the controller thread itself to avoid
+        # a deadlock (e.g. when the loop calls stop() on drone-not-flying).
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(timeout=2.0)
+
         if target_origin:
             try:
                 self._stop_direction(target_origin)
