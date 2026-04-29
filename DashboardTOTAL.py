@@ -73,6 +73,38 @@ TCP_HOST = "localhost"
 TCP_PORT = 9999
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  CONFIGURACIÓN CENTRALIZADA DE PARÁMETROS
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ─── VUELO ───────────────────────────────────────────────────────────────────
+FLIGHT_TAKEOFF_HEIGHT    = 5          # metros — altura de despegue
+FLIGHT_DEFAULT_NAV_SPEED = 1          # m/s — velocidad de navegación inicial
+FLIGHT_MAX_NAV_SPEED     = 20         # m/s — velocidad máxima del slider
+
+# ─── VISIÓN / DETECCIÓN ──────────────────────────────────────────────────────
+VISION_OBJECT_SIZE_M      = 1.0       # metros — medida física del objeto (calibración)
+VISION_CAMERA_VFOV_DEG    = 49.5      # grados — campo de visión vertical de la cámara
+VISION_DISTANCE_K         = 1.2       # constante de calibración (profundidad/bbox)
+VISION_MIN_DISTANCE       = 0.1       # metros — distancia mínima detectable
+VISION_MAX_DISTANCE       = 25.0      # metros — distancia máxima de operación
+VISION_CONFIDENCE_MIN     = 0.35      # confianza mínima para aceptar detecciones
+
+# ─── SEGUIMIENTO (DISTANCE FOLLOW) ───────────────────────────────────────────
+FOLLOW_TARGET_DISTANCE    = 5.0       # metros — distancia objetivo al objeto
+FOLLOW_DISTANCE_DEADBAND  = 0.45      # metros — zona muerta de distancia
+FOLLOW_LATERAL_DEADBAND   = 0.15      # normalizado — zona muerta lateral
+FOLLOW_KP_DISTANCE        = 0.7       # ganancia proporcional para avance/retroceso
+FOLLOW_KP_LATERAL         = 1.15      # ganancia proporcional para corrección lateral
+FOLLOW_MIN_SPEED          = 0.35      # m/s — velocidad mínima en seguimiento
+FOLLOW_MAX_SPEED          = 2.5       # m/s — velocidad máxima en seguimiento
+FOLLOW_LOST_TIMEOUT       = 2.5       # segundos — tiempo para considerar pérdida de objetivo
+FOLLOW_MAX_OFFSET_ABS     = 1.0       # normalizado — límite máximo de offset
+FOLLOW_STOP_AFTER_S       = 2.5       # segundos — tiempo para detener seguimiento tras perder objetivo
+
+# ── Detección y análisis de frames ────────────────────────────────────────────
+DETECTION_CONTROL_HZ      = 8.0       # frecuencia de control del seguimiento
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  BALIZAS V16 — API DGT
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -403,14 +435,14 @@ _auto_follow_active = False
 _auto_follow_lock = threading.Lock()
 _auto_follow_last_target_ts = 0.0
 
-# Calibracion simple distancia/bbox (aproximada; afinable en campo)
-_auto_follow_dist_k = 1.2
-_auto_follow_object_size_m = 1.0
-_auto_follow_camera_vfov_deg = 49.5
-_auto_follow_min_dist = 0.1
-_auto_follow_max_dist = 25.0
-_auto_follow_conf_min = 0.35
-_auto_follow_stop_after_s = 2.5
+# Calibracion simple distancia/bbox (usa parámetros centralizados)
+_auto_follow_dist_k = VISION_DISTANCE_K
+_auto_follow_object_size_m = VISION_OBJECT_SIZE_M
+_auto_follow_camera_vfov_deg = VISION_CAMERA_VFOV_DEG
+_auto_follow_min_dist = VISION_MIN_DISTANCE
+_auto_follow_max_dist = VISION_MAX_DISTANCE
+_auto_follow_conf_min = VISION_CONFIDENCE_MIN
+_auto_follow_stop_after_s = FOLLOW_STOP_AFTER_S
 
 COCO_GRUPOS = [
     ("Personas",    [("Persona",   0)]),
@@ -726,7 +758,7 @@ def _ensure_distance_follow_controller():
             is_flying=_is_drone_flying,
             publish_status=_autopilot_publish_status,
             publish_error=_autopilot_publish_error,
-            control_hz=8.0,
+            control_hz=DETECTION_CONTROL_HZ,
         )
     return _distance_follow
 
@@ -2497,19 +2529,19 @@ def _follow_config():
         except Exception:
             return float(fallback)
 
-    target_distance = max(0.1, _read_float(followTargetDistVar, 5.0))
-    lateral_deadzone = max(0.0, _read_float(followDeadzoneVar, 0.15))
+    target_distance = max(0.1, _read_float(followTargetDistVar, FOLLOW_TARGET_DISTANCE))
+    lateral_deadzone = max(0.0, _read_float(followDeadzoneVar, FOLLOW_LATERAL_DEADBAND))
 
     return {
         "target_distance": target_distance,
-        "distance_deadband": 0.45,
+        "distance_deadband": FOLLOW_DISTANCE_DEADBAND,
         "lateral_deadband": lateral_deadzone,
-        "kp_distance": 0.7,
-        "kp_lateral": 1.15,
-        "min_speed": 0.35,
-        "max_speed": 2.5,
-        "lost_timeout": 2.5,
-        "max_offset_abs": 1.0,
+        "kp_distance": FOLLOW_KP_DISTANCE,
+        "kp_lateral": FOLLOW_KP_LATERAL,
+        "min_speed": FOLLOW_MIN_SPEED,
+        "max_speed": FOLLOW_MAX_SPEED,
+        "lost_timeout": FOLLOW_LOST_TIMEOUT,
+        "max_offset_abs": FOLLOW_MAX_OFFSET_ABS,
     }
 
 
@@ -2608,7 +2640,7 @@ def connect_local():
 
         if ok and dron.state == 'connected':
             connectBtn.configure(text='Conectado', fg='white', bg='green')
-            speedSldr.set(1)
+            speedSldr.set(FLIGHT_DEFAULT_NAV_SPEED)
         else:
             _show_connect_error()
     except Exception as e:
@@ -2617,7 +2649,7 @@ def connect_local():
 
 def takeoff_local():
     dron.arm()
-    dron.takeOff(5, blocking=False,
+    dron.takeOff(FLIGHT_TAKEOFF_HEIGHT, blocking=False,
                  callback=lambda: arm_takeOffBtn.configure(text='En vuelo', fg='white', bg='green'))
     arm_takeOffBtn.configure(text='Despegando...', fg='black', bg='yellow')
 
@@ -2938,7 +2970,7 @@ def crear_ventana(modo):
         b.configure(command=lambda d=direction, x=b: _go(d, x))
         b.grid(row=r, column=c, padx=2, pady=2, sticky="nsew")
 
-    speedSldr = tk.Scale(ctrl, label="Velocidad (m/s):", resolution=1, from_=0, to=20,
+    speedSldr = tk.Scale(ctrl, label="Velocidad (m/s):", resolution=1, from_=0, to=FLIGHT_MAX_NAV_SPEED,
                          tickinterval=5, orient=tk.HORIZONTAL)
     speedSldr.grid(row=7, column=0, columnspan=2, padx=5, pady=3, sticky="nsew")
     speedSldr.bind("<ButtonRelease-1>", _speed)
