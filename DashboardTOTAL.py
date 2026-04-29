@@ -79,10 +79,10 @@ TCP_PORT = 9999
 # ─── VUELO ───────────────────────────────────────────────────────────────────
 FLIGHT_TAKEOFF_HEIGHT    = 5          # metros — altura de despegue
 FLIGHT_DEFAULT_NAV_SPEED = 1          # m/s — velocidad de navegación inicial
-FLIGHT_MAX_NAV_SPEED     = 20         # m/s — velocidad máxima del slider
+FLIGHT_MAX_NAV_SPEED     = 5         # m/s — velocidad máxima del slider
 
 # ─── VISIÓN / DETECCIÓN ──────────────────────────────────────────────────────
-VISION_OBJECT_SIZE_M      = 1.0       # metros — medida física del objeto (calibración)
+VISION_OBJECT_SIZE_M      = 0.18       # metros — medida física del objeto (calibración)
 VISION_CAMERA_VFOV_DEG    = 49.5      # grados — campo de visión vertical de la cámara
 VISION_DISTANCE_K         = 1.2       # constante de calibración (profundidad/bbox)
 VISION_MIN_DISTANCE       = 0.1       # metros — distancia mínima detectable
@@ -91,18 +91,18 @@ VISION_CONFIDENCE_MIN     = 0.35      # confianza mínima para aceptar deteccion
 
 # ─── SEGUIMIENTO (DISTANCE FOLLOW) ───────────────────────────────────────────
 FOLLOW_TARGET_DISTANCE    = 5.0       # metros — distancia objetivo al objeto
-FOLLOW_DISTANCE_DEADBAND  = 0.45      # metros — zona muerta de distancia
+FOLLOW_DISTANCE_DEADBAND  = 0.1      # metros — zona muerta de distancia
 FOLLOW_LATERAL_DEADBAND   = 0.15      # normalizado — zona muerta lateral
 FOLLOW_KP_DISTANCE        = 0.7       # ganancia proporcional para avance/retroceso
 FOLLOW_KP_LATERAL         = 1.15      # ganancia proporcional para corrección lateral
 FOLLOW_MIN_SPEED          = 0.35      # m/s — velocidad mínima en seguimiento
-FOLLOW_MAX_SPEED          = 2.5       # m/s — velocidad máxima en seguimiento
+FOLLOW_MAX_SPEED          = 1       # m/s — velocidad máxima en seguimiento
 FOLLOW_LOST_TIMEOUT       = 2.5       # segundos — tiempo para considerar pérdida de objetivo
 FOLLOW_MAX_OFFSET_ABS     = 1.0       # normalizado — límite máximo de offset
-FOLLOW_STOP_AFTER_S       = 2.5       # segundos — tiempo para detener seguimiento tras perder objetivo
+FOLLOW_STOP_AFTER_S       = 2       # segundos — tiempo para detener seguimiento tras perder objetivo
 
 # ── Detección y análisis de frames ────────────────────────────────────────────
-DETECTION_CONTROL_HZ      = 8.0       # frecuencia de control del seguimiento
+DETECTION_CONTROL_HZ      = 10.0       # frecuencia de control del seguimiento
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  BALIZAS V16 — API DGT
