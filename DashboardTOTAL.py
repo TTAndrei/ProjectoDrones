@@ -1442,14 +1442,53 @@ def stop_camera_service():
 #  DETECCIÓN YOLO — MULTI-CLASE
 # ══════════════════════════════════════════════════════════════════════════════
 
+
+# ── Ruta al modelo entrenado para coches (mismo directorio que este script) ────
+_COCHE_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "best.pt")
+_COCHE_CLASS_ID   = 2    # id de Coche en COCO (usado en detect_object_ids)
+_yolo_model_coche = None  # modelo entrenado — solo para coches
+
+
 def load_yolo():
     global yolo_model
     if yolo_model is None:
-        print("[DET] Cargando YOLOv5s...")
+        print("[DET] Cargando YOLOv5s (modelo base COCO)...")
         import torch
         yolo_model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
         yolo_model.eval()
-        print("[DET] Modelo listo")
+        print("[DET] Modelo base listo")
+
+
+def load_yolo_coche():
+    """Carga el modelo entrenado para coches si existe, si no usa el base."""
+    global _yolo_model_coche
+    if _yolo_model_coche is not None:
+        return
+    import torch
+    if os.path.exists(_COCHE_MODEL_PATH):
+        print(f"[DET] Cargando modelo entrenado de coches: {_COCHE_MODEL_PATH}")
+        try:
+            yolov5_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "yolov5")
+            if os.path.isdir(yolov5_dir):
+                _yolo_model_coche = torch.hub.load(
+                    yolov5_dir, "custom",
+                    path=_COCHE_MODEL_PATH,
+                    source="local"
+                )
+            else:
+                _yolo_model_coche = torch.hub.load(
+                    "ultralytics/yolov5", "custom",
+                    path=_COCHE_MODEL_PATH,
+                    force_reload=False
+                )
+            _yolo_model_coche.names = {0: "Coche"}
+            _yolo_model_coche.eval()
+            print("[DET] ✓ Modelo de coches entrenado listo")
+        except Exception as e:
+            print(f"[DET] Error cargando modelo de coches: {e} — usando modelo base")
+            _yolo_model_coche = None
+    else:
+        print(f"[DET] best.pt no encontrado en {_COCHE_MODEL_PATH} — usando modelo base para coches")
 
 
 def _normalize_detect_ids(raw_ids):
@@ -1470,6 +1509,9 @@ def toggle_detect(obj_id: int, active: bool):
         detect_object_ids.add(obj_id)
         if yolo_model is None:
             threading.Thread(target=load_yolo, daemon=True).start()
+        # ✅ Si activan coche, cargar también el modelo entrenado
+        if obj_id == _COCHE_CLASS_ID:
+            threading.Thread(target=load_yolo_coche, daemon=True).start()
         print(f"[DET] +clase {obj_id}  activas={sorted(detect_object_ids)}")
     else:
         detect_object_ids.discard(obj_id)
@@ -1659,39 +1701,61 @@ def run_detect(frame):
         if oid in detect_object_ids
     }
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        results = yolo_model(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-    boxes = []
+    # ── Separar clases: coche usa modelo entrenado, resto usa modelo base ─────
+    ids_sin_coche  = detect_object_ids - {_COCHE_CLASS_ID}
+    detectar_coche = _COCHE_CLASS_ID in detect_object_ids
+
+    raw_detections = []
+
+    # Modelo base — todas las clases excepto coche
+    if ids_sin_coche:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results_base = yolo_model(rgb)
+        for *xyxy, conf, cls in results_base.xyxy[0]:
+            cls_id = int(cls.item())
+            if cls_id in ids_sin_coche:
+                raw_detections.append((xyxy, conf, cls_id))
+
+    # Modelo entrenado — solo coche
+    if detectar_coche:
+        modelo_coche = _yolo_model_coche if _yolo_model_coche is not None else yolo_model
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results_coche = modelo_coche(rgb)
+
+        # El modelo entrenado usa id=0 internamente → mapeamos a id=2 (COCO)
+        for *xyxy, conf, cls in results_coche.xyxy[0]:
+            cls_interno = int(cls.item())
+            # Si es el modelo entrenado (id=0=Coche) o el base (id=2=Coche)
+            if _yolo_model_coche is not None and cls_interno == 0:
+                raw_detections.append((xyxy, conf, _COCHE_CLASS_ID))
+            elif _yolo_model_coche is None and cls_interno == _COCHE_CLASS_ID:
+                raw_detections.append((xyxy, conf, _COCHE_CLASS_ID))
+
+    # ── Construir boxes y detections ──────────────────────────────────────────
+    boxes      = []
     detections = []
-    for *xyxy, conf, cls in results.xyxy[0]:
-        cls_id = int(cls.item())
-        if cls_id in detect_object_ids:
-            x1, y1, x2, y2 = map(int, xyxy)
-            conf_f = float(conf.item())
-            label = id_to_name.get(cls_id, str(cls_id))
-            boxes.append((x1, y1, x2, y2, label, cls_id, conf_f))
-            detections.append({
-                "x1": x1,
-                "y1": y1,
-                "x2": x2,
-                "y2": y2,
-                "label": label,
-                "cls_id": cls_id,
-                "conf": conf_f,
-                "area": max(1, (x2 - x1) * (y2 - y1)),
-            })
+    for xyxy, conf, cls_id in raw_detections:
+        x1, y1, x2, y2 = map(int, xyxy)
+        conf_f = float(conf.item()) if hasattr(conf, "item") else float(conf)
+        label  = id_to_name.get(cls_id, str(cls_id))
+        boxes.append((x1, y1, x2, y2, label, cls_id, conf_f))
+        detections.append({
+            "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+            "label": label, "cls_id": cls_id,
+            "conf": conf_f,
+            "area": max(1, (x2 - x1) * (y2 - y1)),
+        })
 
     best_depth_target = _pick_follow_target(detections)
     if best_depth_target is not None:
         raw_distance_m = _estimate_distance_from_bbox(
-            best_depth_target["x1"],
-            best_depth_target["y1"],
-            best_depth_target["x2"],
-            best_depth_target["y2"],
-            frame.shape,
-            clamp=False,
+            best_depth_target["x1"], best_depth_target["y1"],
+            best_depth_target["x2"], best_depth_target["y2"],
+            frame.shape, clamp=False,
         )
         distance_m = max(_auto_follow_min_dist, min(_auto_follow_max_dist, raw_distance_m))
         print(
