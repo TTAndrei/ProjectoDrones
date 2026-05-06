@@ -77,20 +77,21 @@ TCP_PORT = 9999
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ─── VUELO ───────────────────────────────────────────────────────────────────
-FLIGHT_TAKEOFF_HEIGHT    = 5          # metros — altura de despegue
+FLIGHT_TAKEOFF_HEIGHT    = 2          # metros — altura de despegue
 FLIGHT_DEFAULT_NAV_SPEED = 1          # m/s — velocidad de navegación inicial
 FLIGHT_MAX_NAV_SPEED     = 5         # m/s — velocidad máxima del slider
 
 # ─── VISIÓN / DETECCIÓN ──────────────────────────────────────────────────────
 VISION_OBJECT_SIZE_M      = 0.18       # metros — medida física del objeto (calibración)
 VISION_CAMERA_VFOV_DEG    = 49.5      # grados — campo de visión vertical de la cámara
+VISION_CAMERA_PITCH_DEG   = 0.0       # grados — 0 frontal, positivo hacia abajo
 VISION_DISTANCE_K         = 1.2       # constante de calibración (profundidad/bbox)
 VISION_MIN_DISTANCE       = 0.1       # metros — distancia mínima detectable
 VISION_MAX_DISTANCE       = 25.0      # metros — distancia máxima de operación
 VISION_CONFIDENCE_MIN     = 0.35      # confianza mínima para aceptar detecciones
 
 # ─── SEGUIMIENTO (DISTANCE FOLLOW) ───────────────────────────────────────────
-FOLLOW_TARGET_DISTANCE    = 5.0       # metros — distancia objetivo al objeto
+FOLLOW_TARGET_DISTANCE    = 2       # metros — distancia objetivo al objeto
 FOLLOW_DISTANCE_DEADBAND  = 0.1      # metros — zona muerta de distancia
 FOLLOW_LATERAL_DEADBAND   = 0.15      # normalizado — zona muerta lateral
 FOLLOW_KP_DISTANCE        = 0.7       # ganancia proporcional para avance/retroceso
@@ -100,6 +101,9 @@ FOLLOW_MAX_SPEED          = 1       # m/s — velocidad máxima en seguimiento
 FOLLOW_LOST_TIMEOUT       = 2.5       # segundos — tiempo para considerar pérdida de objetivo
 FOLLOW_MAX_OFFSET_ABS     = 1.0       # normalizado — límite máximo de offset
 FOLLOW_STOP_AFTER_S       = 2       # segundos — tiempo para detener seguimiento tras perder objetivo
+FOLLOW_ALT_MIN_M          = 1       # metros — altura minima segura (0 desactiva)
+FOLLOW_ALT_MAX_M          = 5     # metros — altura maxima segura (0 desactiva)
+FOLLOW_ALT_STALE_S        = 3.0       # segundos — max antiguedad de altitud en telemetria
 
 # ── Detección y análisis de frames ────────────────────────────────────────────
 DETECTION_CONTROL_HZ      = 10.0       # frecuencia de control del seguimiento
@@ -439,10 +443,14 @@ _auto_follow_last_target_ts = 0.0
 _auto_follow_dist_k = VISION_DISTANCE_K
 _auto_follow_object_size_m = VISION_OBJECT_SIZE_M
 _auto_follow_camera_vfov_deg = VISION_CAMERA_VFOV_DEG
+_auto_follow_camera_pitch_deg = VISION_CAMERA_PITCH_DEG
 _auto_follow_min_dist = VISION_MIN_DISTANCE
 _auto_follow_max_dist = VISION_MAX_DISTANCE
 _auto_follow_conf_min = VISION_CONFIDENCE_MIN
 _auto_follow_stop_after_s = FOLLOW_STOP_AFTER_S
+
+_follow_alt_m = None
+_follow_alt_ts = 0.0
 
 COCO_GRUPOS = [
     ("Personas",    [("Persona",   0)]),
@@ -1532,6 +1540,60 @@ def _estimate_distance_from_bbox(x1, y1, x2, y2, frame_shape, clamp=True):
     return distance
 
 
+def _update_follow_altitude(alt_value):
+    global _follow_alt_m, _follow_alt_ts
+    try:
+        alt_m = float(alt_value)
+    except Exception:
+        return
+    _follow_alt_m = alt_m
+    _follow_alt_ts = time.time()
+
+
+def _get_follow_altitude():
+    if _follow_alt_m is None:
+        return None
+    if (time.time() - _follow_alt_ts) > FOLLOW_ALT_STALE_S:
+        return None
+    return _follow_alt_m
+
+
+def _altitude_out_of_range(alt_m):
+    if alt_m is None:
+        return False
+    if FOLLOW_ALT_MIN_M > 0 and alt_m < FOLLOW_ALT_MIN_M:
+        return True
+    if FOLLOW_ALT_MAX_M > 0 and alt_m > FOLLOW_ALT_MAX_M:
+        return True
+    return False
+
+
+def _estimate_horizontal_distance_from_bbox(x1, y1, x2, y2, frame_shape, alt_m=None):
+    slant = _estimate_distance_from_bbox(x1, y1, x2, y2, frame_shape, clamp=False)
+
+    img_h = max(1, int(frame_shape[0]))
+    cy = (y1 + y2) * 0.5
+    norm_y = (cy - (img_h * 0.5)) / max(1.0, img_h * 0.5)
+
+    vfov_rad = math.radians(max(5.0, min(170.0, float(_auto_follow_camera_vfov_deg))))
+    angle_y = norm_y * (vfov_rad * 0.5)
+    pitch_rad = math.radians(float(_auto_follow_camera_pitch_deg))
+    total_pitch = pitch_rad + angle_y
+
+    # Project slant range into the horizontal plane using camera pitch + bbox offset.
+    horizontal = slant * math.cos(total_pitch)
+    if horizontal < 0.0:
+        horizontal = 0.0
+
+    if alt_m is not None:
+        if _altitude_out_of_range(alt_m):
+            return None, slant, total_pitch
+        if slant < alt_m:
+            return None, slant, total_pitch
+
+    return horizontal, slant, total_pitch
+
+
 def set_detect_object_physical_size(size_text):
     global _auto_follow_object_size_m
     try:
@@ -1556,6 +1618,25 @@ def set_detect_object_physical_size(size_text):
         return True
     except Exception:
         print(f"[DEPTH] Valor inválido '{size_text}'. Usa 'm' o 'cm' (ej: 1.70, 0.17, 17cm)")
+        return False
+
+
+def set_camera_pitch_deg(pitch_text):
+    global _auto_follow_camera_pitch_deg
+    try:
+        raw_text = str(pitch_text).strip().lower().replace(",", ".")
+        if raw_text.endswith("deg"):
+            raw_text = raw_text[:-3].strip()
+        value = float(raw_text)
+        if value < -89.0:
+            value = -89.0
+        if value > 89.0:
+            value = 89.0
+        _auto_follow_camera_pitch_deg = value
+        print(f"[CAM] Pitch camara: {_auto_follow_camera_pitch_deg:.1f} deg")
+        return True
+    except Exception:
+        print(f"[CAM] Valor de pitch invalido '{pitch_text}' (usa grados, ej: 0, 30, 90)")
         return False
 
 
@@ -1590,11 +1671,24 @@ def _auto_follow_from_detections(frame_shape, detections):
         img_h, img_w = int(frame_shape[0]), int(frame_shape[1])
         cx = (x1 + x2) * 0.5
         offset_x = (cx - (img_w * 0.5)) / max(1.0, img_w * 0.5)
-        distance_m = _estimate_distance_from_bbox(x1, y1, x2, y2, frame_shape)
+        alt_m = _get_follow_altitude()
+        horiz_m, slant_m, total_pitch = _estimate_horizontal_distance_from_bbox(
+            x1, y1, x2, y2, frame_shape, alt_m=alt_m
+        )
+        if horiz_m is None:
+            distance_m = _auto_follow_max_dist
+            valid = False
+        else:
+            distance_m = max(_auto_follow_min_dist, min(_auto_follow_max_dist, horiz_m))
+            valid = True
         confidence = float(best.get("conf", 1.0))
         target_id = f"{best.get('label', 'obj')}:{best.get('cls_id', 'na')}"
+        pitch_deg = math.degrees(total_pitch)
+        alt_str = f"{alt_m:.1f}m" if alt_m is not None else "n/a"
+        horiz_str = f"{distance_m:.2f}m" if valid else "n/a"
         print(
-            f"[FOLLOW] Distancia estimada={distance_m:.2f}m "
+            f"[FOLLOW] Dist horiz={horiz_str} slant={slant_m:.2f}m "
+            f"alt={alt_str} pitch={pitch_deg:.1f}deg "
             f"offset_x={offset_x:+.3f} conf={confidence:.2f} target={target_id}"
         )
     else:
@@ -1602,6 +1696,7 @@ def _auto_follow_from_detections(frame_shape, detections):
         distance_m = None
         confidence = 0.0
         target_id = None
+        valid = False
 
     if MODE == "global":
         if client_dashboard is None:
@@ -1618,6 +1713,9 @@ def _auto_follow_from_detections(frame_shape, detections):
                 return
 
             if not _auto_follow_active:
+                if not valid:
+                    print("[FOLLOW] Distancia horizontal invalida; esperando alt/pitch")
+                    return
                 try:
                     startDistanceFollow_global(_follow_config())
                     _auto_follow_active = True
@@ -1631,10 +1729,11 @@ def _auto_follow_from_detections(frame_shape, detections):
                     distance_m=distance_m,
                     offset_x=offset_x,
                     confidence=confidence,
-                    valid=True,
+                    valid=valid,
                     target_id=target_id,
                 )
-                _auto_follow_last_target_ts = now
+                if valid:
+                    _auto_follow_last_target_ts = now
             except Exception as e:
                 print(f"[FOLLOW] Error enviando updateDistanceFollow: {e}")
         return
@@ -1658,6 +1757,9 @@ def _auto_follow_from_detections(frame_shape, detections):
             return
 
         if not _auto_follow_active:
+            if not valid:
+                print("[FOLLOW] Distancia horizontal invalida; esperando alt/pitch")
+                return
             try:
                 controller.start(origin="local", config=_follow_config())
                 _auto_follow_active = True
@@ -1670,11 +1772,12 @@ def _auto_follow_from_detections(frame_shape, detections):
             controller.update_observation({
                 "distance_m": distance_m,
                 "offset_x": offset_x,
-                "valid": True,
+                "valid": valid,
                 "confidence": confidence,
                 "target_id": target_id,
             })
-            _auto_follow_last_target_ts = now
+            if valid:
+                _auto_follow_last_target_ts = now
         except Exception as e:
             print(f"[FOLLOW] Error actualizando seguimiento local: {e}")
 
@@ -1717,17 +1820,21 @@ def run_detect(frame):
 
     best_depth_target = _pick_follow_target(detections)
     if best_depth_target is not None:
-        raw_distance_m = _estimate_distance_from_bbox(
+        alt_m = _get_follow_altitude()
+        horiz_m, slant_m, total_pitch = _estimate_horizontal_distance_from_bbox(
             best_depth_target["x1"],
             best_depth_target["y1"],
             best_depth_target["x2"],
             best_depth_target["y2"],
             frame.shape,
-            clamp=False,
+            alt_m=alt_m,
         )
-        distance_m = max(_auto_follow_min_dist, min(_auto_follow_max_dist, raw_distance_m))
+        if horiz_m is None:
+            dist_str = "n/a"
+        else:
+            dist_str = f"{horiz_m:.2f}m"
         print(
-            f"[DEPTH] Distancia estimada={raw_distance_m:.2f}m "
+            f"[DEPTH] Dist horiz={dist_str} slant={slant_m:.2f}m "
             f"target={best_depth_target.get('label', 'obj')}:{best_depth_target.get('cls_id', 'na')} "
             f"conf={float(best_depth_target.get('conf', 0.0)):.2f}"
         )
@@ -1981,6 +2088,7 @@ def on_mqtt_message_dashboard(cli, userdata, msg):
         except Exception:
             return
 
+        _update_follow_altitude(data.get("alt"))
         now = time.time()
         source = str(data.get("_source", "unknown"))
         can_switch = (_dashboard_telem_source is None or
@@ -2678,6 +2786,7 @@ def go_local(direction, btn):
 
 def startTelem_local():
     def _update(info):
+        _update_follow_altitude(info.get("alt"))
         altShowLbl['text']     = f"{round(info.get('alt', 0), 1)} m"
         headingShowLbl['text'] = f"{round(info.get('heading', 0), 1)}°"
         stateShowLbl['text']   = info.get('state', '')
@@ -2819,6 +2928,37 @@ def _build_detection_panel(parent):
     ).grid(row=row_idx, column=3, sticky="w", padx=2, pady=(6, 2))
 
     size_entry.bind("<Return>", _apply_object_size)
+
+    row_idx += 1
+    tk.Label(
+        inner,
+        text="Pitch camara (deg, 0 frontal, 90 zenital):",
+        font=("Arial", 8, "bold"),
+        fg="#333333",
+    ).grid(row=row_idx, column=0, columnspan=2, sticky="w", padx=4, pady=(6, 2))
+
+    pitch_var = tk.StringVar(value=f"{_auto_follow_camera_pitch_deg:.1f}")
+    pitch_entry = tk.Entry(inner, textvariable=pitch_var, width=10, font=("Arial", 8))
+    pitch_entry.grid(row=row_idx, column=2, sticky="w", padx=(0, 4), pady=(6, 2))
+
+    def _apply_pitch(*_):
+        ok = set_camera_pitch_deg(pitch_var.get())
+        if ok:
+            pitch_var.set(f"{_auto_follow_camera_pitch_deg:.1f}")
+
+    tk.Button(
+        inner,
+        text="Aplicar",
+        font=("Arial", 8),
+        bg="#3b7ddd",
+        fg="white",
+        relief="flat",
+        padx=6,
+        pady=1,
+        command=_apply_pitch,
+    ).grid(row=row_idx, column=3, sticky="w", padx=2, pady=(6, 2))
+
+    pitch_entry.bind("<Return>", _apply_pitch)
 
     row_idx += 1
     tk.Label(
