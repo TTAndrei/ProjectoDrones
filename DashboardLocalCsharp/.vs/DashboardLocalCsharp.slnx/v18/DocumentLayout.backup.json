@@ -1,0 +1,138 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\Form2.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:Formulario\\Form2.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\FormGallery.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:Formulario\\FormGallery.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\Formulario.csproj||{FA3CD31E-987B-443A-9B81-186104E8DAC1}",
+      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:Formulario\\Formulario.csproj||{FA3CD31E-987B-443A-9B81-186104E8DAC1}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\Program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:Formulario\\Program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\Form2.Designer.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:Formulario\\Form2.Designer.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\Form1.Designer.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:Formulario\\Form1.Designer.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\Form1.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:Formulario\\Form1.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 0,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedWidth": 200,
+          "SelectedChildIndex": 2,
+          "Children": [
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "FormGallery.cs",
+              "DocumentMoniker": "C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\FormGallery.cs",
+              "RelativeDocumentMoniker": "Formulario\\FormGallery.cs",
+              "ToolTip": "C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\FormGallery.cs",
+              "RelativeToolTip": "Formulario\\FormGallery.cs",
+              "ViewState": "AgIAAI0AAAAAAAAAAAAAAAsAAAAbAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-03-19T19:47:32.059Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 4,
+              "Title": "Form2.Designer.cs",
+              "DocumentMoniker": "C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\Form2.Designer.cs",
+              "RelativeDocumentMoniker": "Formulario\\Form2.Designer.cs",
+              "ToolTip": "C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\Form2.Designer.cs",
+              "RelativeToolTip": "Formulario\\Form2.Designer.cs",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAABUAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-03-19T19:44:33.428Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "Form2.cs",
+              "DocumentMoniker": "C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\Form2.cs",
+              "RelativeDocumentMoniker": "Formulario\\Form2.cs",
+              "ToolTip": "C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\Form2.cs",
+              "RelativeToolTip": "Formulario\\Form2.cs",
+              "ViewState": "AgIAABEDAAAAAAAAAAAwwDwDAAABAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-03-19T17:17:01.398Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 5,
+              "Title": "Form1.Designer.cs",
+              "DocumentMoniker": "C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\Form1.Designer.cs",
+              "RelativeDocumentMoniker": "Formulario\\Form1.Designer.cs",
+              "ToolTip": "C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\Form1.Designer.cs",
+              "RelativeToolTip": "Formulario\\Form1.Designer.cs",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAABYAAAAIAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-03-11T12:27:58.359Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 3,
+              "Title": "Program.cs",
+              "DocumentMoniker": "C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\Program.cs",
+              "RelativeDocumentMoniker": "Formulario\\Program.cs",
+              "ToolTip": "C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\Program.cs",
+              "RelativeToolTip": "Formulario\\Program.cs",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-03-11T12:27:54.735Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 6,
+              "Title": "Form1.cs",
+              "DocumentMoniker": "C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\Form1.cs",
+              "RelativeDocumentMoniker": "Formulario\\Form1.cs",
+              "ToolTip": "C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\Form1.cs",
+              "RelativeToolTip": "Formulario\\Form1.cs",
+              "ViewState": "AgIAAEEAAAAAAAAAAAAYwFgAAAAJAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-02-24T17:47:41.147Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 2,
+              "Title": "Formulario.csproj",
+              "DocumentMoniker": "C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\Formulario.csproj",
+              "RelativeDocumentMoniker": "Formulario\\Formulario.csproj",
+              "ToolTip": "C:\\Users\\Joan\\PycharmProjects\\ProjectoDrones\\DashboardLocalCsharp\\Formulario\\Formulario.csproj",
+              "RelativeToolTip": "Formulario\\Formulario.csproj",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000758|",
+              "WhenOpened": "2026-02-24T17:47:39.081Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
