@@ -359,6 +359,7 @@ dron = Dron()
 altShowLbl = headingShowLbl = stateShowLbl = None
 speedShowLbl = battShowLbl = gpsShowLbl = None
 connectBtn = arm_takeOffBtn = landBtn = RTLBtn = followBtn = overlayBtn = None
+_mode_buttons = {}
 _debug_overlay = False
 speedSldr  = gradesSldr = None
 followTargetDistVar = followDeadzoneVar = None
@@ -755,7 +756,6 @@ def _follow_stop_direction(origin):
 
 def _follow_send_rc(roll_pwm, pitch_pwm):
     dron.send_rc(roll_pwm, pitch_pwm, 1500, 1500)
-    print(f"[RC] roll={roll_pwm} pitch={pitch_pwm}")
 
 
 def _is_drone_flying() -> bool:
@@ -1027,6 +1027,15 @@ def autopilot_on_message(cli, userdata, message):
         dron.goto(coords["lat"], coords["lon"], coords.get("alt", 5.0),
                   blocking=False)
         print(f"[AUTOPILOT] goto → {coords['lat']:.6f}, {coords['lon']:.6f}, {coords.get('alt',5)}m")
+
+    elif command == 'setFlightMode':
+        mode_name = message.payload.decode("utf-8").strip().upper()
+        try:
+            dron.setFlightMode(mode_name)
+            _autopilot_publish_status(f"Modo de vuelo: {mode_name}", origin=origin)
+            print(f"[AUTOPILOT] Modo cambiado a {mode_name}")
+        except Exception as e:
+            _autopilot_publish_error(f"Error cambiando modo a {mode_name}: {e}", origin=origin)
 
 
 def autopilot_on_connect(cli, userdata, flags, rc):
@@ -1647,21 +1656,13 @@ def _get_follow_altitude():
 def _estimate_horizontal_distance_from_bbox(x1, y1, x2, y2, frame_shape, alt_m=None):
     slant = _estimate_distance_from_bbox(x1, y1, x2, y2, frame_shape, clamp=False)
 
-    img_h = max(1, int(frame_shape[0]))
-    cy = (y1 + y2) * 0.5
-    norm_y = (cy - (img_h * 0.5)) / max(1.0, img_h * 0.5)
-
-    vfov_rad = math.radians(max(5.0, min(170.0, float(_auto_follow_camera_vfov_deg))))
-    angle_y = norm_y * (vfov_rad * 0.5)
+    # Usa solo el ángulo fijo de montaje de la cámara (no la posición vertical del bbox).
     pitch_rad = math.radians(float(_auto_follow_camera_pitch_deg))
-    total_pitch = pitch_rad + angle_y
-
-    # Project slant range into the horizontal plane using camera pitch + bbox offset.
-    horizontal = slant * math.cos(total_pitch)
+    horizontal = slant * math.cos(pitch_rad)
     if horizontal < 0.0:
         horizontal = 0.0
 
-    return horizontal, slant, total_pitch
+    return horizontal, slant, pitch_rad
 
 
 def set_detect_object_physical_size(size_text):
@@ -1773,12 +1774,12 @@ def _auto_follow_from_detections(frame_shape, detections):
             valid = True
         confidence = float(best.get("conf", 1.0))
         target_id = f"{best.get('label', 'obj')}:{best.get('cls_id', 'na')}"
-        pitch_deg = math.degrees(total_pitch)
+        cam_pitch_deg = float(_auto_follow_camera_pitch_deg)
         alt_str = f"{alt_m:.1f}m" if alt_m is not None else "n/a"
         horiz_str = f"{distance_m:.2f}m" if valid else "n/a"
         print(
             f"[FOLLOW] Dist horiz={horiz_str} slant={slant_m:.2f}m "
-            f"alt={alt_str} pitch={pitch_deg:.1f}deg "
+            f"alt={alt_str} cam_pitch={cam_pitch_deg:.1f}deg "
             f"offset_x={offset_x:+.3f} conf={confidence:.2f} target={target_id}"
         )
     else:
@@ -2243,6 +2244,7 @@ def on_mqtt_message_dashboard(cli, userdata, msg):
                 update_map(lat, lon)
             else:
                 gpsShowLbl['text'] = 'sin GPS'
+            _update_mode_btn_ui(data.get('flightMode'))
 
         _ui_call(_update_telemetry_ui)
     elif topic == T_CRIME_ALERT:
@@ -2721,6 +2723,18 @@ def RTL_global():
     client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/RTL')
     RTLBtn.configure(text='Retornando...', fg='black', bg='yellow')
 
+def _update_mode_btn_ui(flight_mode):
+    mode_upper = (flight_mode or "").upper().strip()
+    for mode, btn in _mode_buttons.items():
+        try:
+            btn.configure(bg="#228B22" if mode == mode_upper else "#336699")
+        except Exception:
+            pass
+
+def setFlightMode_global(mode):
+    client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/setFlightMode', mode)
+    print(f"[UI] setFlightMode → {mode}")
+
 def go_global(direction, btn):
     global previousBtn
     if previousBtn: previousBtn.configure(fg='black', bg='dark orange')
@@ -2930,6 +2944,13 @@ def RTL_local():
     dron.RTL()
     RTLBtn.configure(text='Retornando...', fg='black', bg='yellow')
 
+def setFlightMode_local(mode):
+    try:
+        dron.setFlightMode(mode)
+        print(f"[UI] setFlightMode → {mode}")
+    except Exception as e:
+        print(f"[UI] Error cambiando modo a {mode}: {e}")
+
 def go_local(direction, btn):
     global previousBtn
     if previousBtn: previousBtn.configure(fg='black', bg='dark orange')
@@ -2953,6 +2974,7 @@ def startTelem_local():
             update_map(lat, lon)
         else:
             gpsShowLbl['text'] = 'sin GPS'
+        _update_mode_btn_ui(info.get('flightMode'))
     dron.send_telemetry_info(_update)
 
 def stopTelem_local():  dron.stop_sending_telemetry_info()
@@ -2968,7 +2990,7 @@ def changeNavSpeed_local(e):
 
 def _build_detection_panel(parent):
     df = tk.LabelFrame(parent, text="Detección de objetos (multi-clase COCO)")
-    df.grid(row=11, column=0, columnspan=2, padx=5, pady=3, sticky="nsew")
+    df.grid(row=12, column=0, columnspan=2, padx=5, pady=3, sticky="nsew")
 
     canvas = tk.Canvas(df, height=130, highlightthickness=0)
     vsb    = tk.Scrollbar(df, orient="vertical", command=canvas.yview)
@@ -3214,6 +3236,7 @@ def crear_ventana(modo):
         _stopCam = stop_camera_service
         _startT  = startTelem_global; _stopT = stopTelem_global
         _heading = changeHeading_global; _speed = changeNavSpeed_global
+        _setFlightMode = setFlightMode_global
 
         sim_tag = " · Sim" if not REAL_DRONE else ""
         rol_tag = "📡 Estación de Tierra" if IS_GROUND_STATION else "📺 Cliente"
@@ -3229,6 +3252,7 @@ def crear_ventana(modo):
         _stopCam = stop_camera_service
         _startT  = startTelem_local; _stopT  = stopTelem_local
         _heading = changeHeading_local; _speed = changeNavSpeed_local
+        _setFlightMode = setFlightMode_local
         titulo   = "Dashboard Dron — Modo Local 🔌"
 
     # ── Ventana principal ─────────────────────────────────────────────────────
@@ -3262,7 +3286,7 @@ def crear_ventana(modo):
     # ── Panel izquierdo: controles ────────────────────────────────────────────
     ctrl = tk.Frame(v)
     ctrl.grid(row=ctrl_row, column=0, sticky="nsew", padx=(4,2), pady=4)
-    for i in range(13): ctrl.rowconfigure(i, weight=1)
+    for i in range(14): ctrl.rowconfigure(i, weight=1)
     ctrl.columnconfigure(0, weight=1); ctrl.columnconfigure(1, weight=1)
 
     def btn(text, cmd, row, col=0, cs=2, bg="dark orange", parent=None):
@@ -3278,13 +3302,25 @@ def crear_ventana(modo):
     landBtn        = btn("Aterrizar", _land,    5, col=0, cs=1)
     RTLBtn         = btn("RTL",       _RTL,     5, col=1, cs=1)
 
+    mf = tk.LabelFrame(ctrl, text="Modo de vuelo RC")
+    mf.grid(row=6, column=0, columnspan=2, padx=8, pady=3, sticky="nsew")
+    for i in range(2): mf.columnconfigure(i, weight=1)
+    tk.Label(mf, text="Cambiar modo para usar RC físico:", font=("Arial", 7)).grid(
+        row=0, column=0, columnspan=4, padx=2, pady=1)
+    for idx, mode in enumerate(["GUIDED", "LOITER", "ALT_HOLD", "STABILIZE"]):
+        b = tk.Button(mf, text=mode, bg="#336699", fg="white",
+                      command=lambda m=mode: _setFlightMode(m))
+        b.grid(row=1, column=idx, padx=2, pady=2, sticky="nsew")
+        _mode_buttons[mode] = b
+    for i in range(4): mf.columnconfigure(i, weight=1)
+
     gradesSldr = tk.Scale(ctrl, label="Grados:", resolution=5, from_=0, to=360,
                           tickinterval=45, orient=tk.HORIZONTAL)
     gradesSldr.grid(row=4, column=0, columnspan=2, padx=5, pady=3, sticky="nsew")
     gradesSldr.bind("<ButtonRelease-1>", _heading)
 
     nf = tk.LabelFrame(ctrl, text="Navegación")
-    nf.grid(row=6, column=0, columnspan=2, padx=8, pady=3, sticky="nsew")
+    nf.grid(row=7, column=0, columnspan=2, padx=8, pady=3, sticky="nsew")
     for i in range(3): nf.rowconfigure(i, weight=1); nf.columnconfigure(i, weight=1)
     dirs = [("NW","NorthWest",0,0),("N","North",0,1),("NE","NorthEast",0,2),
             ("W","West",1,0),("Stop","Stop",1,1),("E","East",1,2),
@@ -3296,14 +3332,14 @@ def crear_ventana(modo):
 
     speedSldr = tk.Scale(ctrl, label="Velocidad (m/s):", resolution=1, from_=0, to=FLIGHT_MAX_NAV_SPEED,
                          tickinterval=5, orient=tk.HORIZONTAL)
-    speedSldr.grid(row=7, column=0, columnspan=2, padx=5, pady=3, sticky="nsew")
+    speedSldr.grid(row=8, column=0, columnspan=2, padx=5, pady=3, sticky="nsew")
     speedSldr.bind("<ButtonRelease-1>", _speed)
 
-    btn("Empezar telemetría", _startT, 8, col=0, cs=1)
-    btn("Parar telemetría",   _stopT,  8, col=1, cs=1)
+    btn("Empezar telemetría", _startT, 9, col=0, cs=1)
+    btn("Parar telemetría",   _stopT,  9, col=1, cs=1)
 
     tf = tk.LabelFrame(ctrl, text="Telemetría")
-    tf.grid(row=9, column=0, columnspan=2, padx=5, pady=3, sticky="nsew")
+    tf.grid(row=10, column=0, columnspan=2, padx=5, pady=3, sticky="nsew")
     for i in range(6): tf.columnconfigure(i, weight=1)
     for txt, col in [("Altitud",0),("Heading",1),("Estado",2),("Vel.",3),("Batería",4),("GPS",5)]:
         tk.Label(tf, text=txt, font=("Arial",7,"bold")).grid(row=0, column=col, padx=2, pady=1)
@@ -3314,8 +3350,8 @@ def crear_ventana(modo):
     battShowLbl    = tk.Label(tf, text=''); battShowLbl.grid(row=1, column=4, padx=2)
     gpsShowLbl     = tk.Label(tf, text=''); gpsShowLbl.grid(row=1, column=5, padx=2)
 
-    btn("▶ Ver video del dron",  _video,   10, col=0, cs=1)
-    btn("⏹ Desconectar cámara", _stopCam, 10, col=1, cs=1, bg="#e14d03")
+    btn("▶ Ver video del dron",  _video,   11, col=0, cs=1)
+    btn("⏹ Desconectar cámara", _stopCam, 11, col=1, cs=1, bg="#e14d03")
 
     # ── Panel de detección multi-clase ────────────────────────────────────────
     _build_detection_panel(ctrl)
@@ -3329,7 +3365,7 @@ def crear_ventana(modo):
     map_frame.columnconfigure(0, weight=1)
 
     map_widget = tkintermapview.TkinterMapView(
-        map_frame, width=600, height=700, corner_radius=4)
+        map_frame, width=500, height=500, corner_radius=4)
     map_widget.grid(row=0, column=0, sticky="nsew")
 
     map_widget.set_position(DEFAULT_LAT, DEFAULT_LON)

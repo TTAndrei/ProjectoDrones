@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m py_compile DashboardTOTAL.py)",
+      "Bash(python -m py_compile distance_follow_controller.py)",
+      "Bash(python -m py_compile dronLink/modules/dron_arm.py)"
+    ]
+  }
+}

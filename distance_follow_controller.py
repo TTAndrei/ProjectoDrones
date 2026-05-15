@@ -131,6 +131,7 @@ class DistanceFollowController:
         self._prev_ctrl_ts = 0.0
         self._smooth_deriv_d = 0.0
         self._smooth_deriv_x = 0.0
+        self._rc_print_tick = 0
 
         self._reset_defaults()
 
@@ -165,6 +166,7 @@ class DistanceFollowController:
             self._running = True
             self._last_direction = None
             self._last_lost_report_ts = 0.0
+            self._rc_print_tick = 0
             # Reset derivative state so stale data doesn't corrupt first command
             self._prev_e_d = 0.0
             self._prev_e_x = 0.0
@@ -325,6 +327,16 @@ class DistanceFollowController:
                 continue
 
             roll_pwm, pitch_pwm = self._compute_command(obs, params, now)
+            self._rc_print_tick += 1
+            if self._rc_print_tick >= max(1, int(self._control_hz)):
+                self._rc_print_tick = 0
+                e_d = obs['distance_m'] - params['target_distance']
+                print(
+                    f"[FOLLOW-RC] dist={obs['distance_m']:.2f}m (err={e_d:+.2f}m)  "
+                    f"offset_x={obs.get('offset_x', 0.0):.3f}  "
+                    f"→  ch1(roll)={roll_pwm}  ch2(pitch)={pitch_pwm}  "
+                    f"ch3(throttle)=1500  ch4(yaw)=1500"
+                )
             self._send_motion(origin, roll_pwm, pitch_pwm)
             time.sleep(period)
 
