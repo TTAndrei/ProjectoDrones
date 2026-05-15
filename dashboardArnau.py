@@ -11,40 +11,6 @@
 #mavproxy --master=com3 --out=udp:127.0.0.1:14550 --out=udp:127.0.0.1:14551
 # =====================================================
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  ÍNDICE — buscar §TAG con Ctrl+F para saltar al bloque
-# ══════════════════════════════════════════════════════════════════════════════
-#  §CONFIG           Configuración MQTT / red / servidor
-#  §PARAMS           Parámetros centralizados (vuelo, visión, seguimiento)
-#  §V16_API          Balizas V16 — API DGT
-#  §SLOTS            Selección automática de slot HiveMQ
-#  §ESTADO           Estado global y variables compartidas
-#  §SELECTOR_SIM     Pantalla de selección simulación / dron real
-#  §SELECTOR_MODO    Pantalla de selección modo (global / local)
-#  §ROL_NEGOC        Negociación de rol ground station
-#  §ROL_DIALOGO      Diálogo de rol en pantalla
-#  §AUTOPILOT        Autopilot Service — gestión de comandos y telemetría
-#  §AUTOPILOT_RC     Callbacks RC y controlador de seguimiento
-#  §AUTOPILOT_MQTT   MQTT callbacks del autopilot service
-#  §CAMARA           Camera Service — captura y streaming WebRTC
-#  §DETECCION        Detección YOLO multi-clase
-#  §DETECCION_DIST   Estimación de distancia desde bounding box
-#  §DETECCION_FOLLOW Lógica de auto-seguimiento (_auto_follow_from_detections)
-#  §DETECCION_DEBUG  Debug overlay (puntos centro imagen / bbox)
-#  §WEBRTC           WebRTC Dashboard — receptor de vídeo
-#  §WEBRTC_MQTT      MQTT message handler del dashboard
-#  §WEBRTC_CRIMEN    Alertas de crimen y popup de clip
-#  §MAPA             Mapa interactivo con marcadores
-#  §V16_MAPA         Balizas V16 — carga y dibujo en el mapa
-#  §CONTROL          Control del dron — botones y comandos
-#  §CONTROL_GLOBAL   Comandos modo global (connect/takeoff/follow/...)
-#  §CONTROL_FOLLOW   Distance follow global
-#  §CONTROL_LOCAL    Comandos modo local (dronLink directo)
-#  §PANEL_DETECCION  Panel UI de detección (selector clases, parámetros)
-#  §GUI              Ventana principal — crear_ventana()
-#  §MAIN             Entry point
-# ══════════════════════════════════════════════════════════════════════════════
-
 import asyncio, json, os, ssl, threading, time, requests, sys
 import logging, warnings, base64, math
 from datetime import datetime, timedelta
@@ -67,7 +33,7 @@ from dronLink.Dron import Dron
 from distance_follow_controller import DistanceFollowController
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  §CONFIG  CONFIGURACIÓN
+#  CONFIGURACIÓN
 # ══════════════════════════════════════════════════════════════════════════════
 
 BROKER_DASHBOARD = "554f19f1f4944c978dd30b509d24afc0.s1.eu.hivemq.cloud"
@@ -107,45 +73,39 @@ TCP_HOST = "localhost"
 TCP_PORT = 9999
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  §PARAMS  CONFIGURACIÓN CENTRALIZADA DE PARÁMETROS
+#  CONFIGURACIÓN CENTRALIZADA DE PARÁMETROS
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ─── VUELO ───────────────────────────────────────────────────────────────────
-FLIGHT_TAKEOFF_HEIGHT    = 2          # metros — altura de despegue
+FLIGHT_TAKEOFF_HEIGHT    = 5          # metros — altura de despegue
 FLIGHT_DEFAULT_NAV_SPEED = 1          # m/s — velocidad de navegación inicial
 FLIGHT_MAX_NAV_SPEED     = 5         # m/s — velocidad máxima del slider
 
 # ─── VISIÓN / DETECCIÓN ──────────────────────────────────────────────────────
 VISION_OBJECT_SIZE_M      = 0.18       # metros — medida física del objeto (calibración)
 VISION_CAMERA_VFOV_DEG    = 49.5      # grados — campo de visión vertical de la cámara
-VISION_CAMERA_PITCH_DEG   = 0.0       # grados — 0 frontal, positivo hacia abajo
 VISION_DISTANCE_K         = 1.2       # constante de calibración (profundidad/bbox)
 VISION_MIN_DISTANCE       = 0.1       # metros — distancia mínima detectable
 VISION_MAX_DISTANCE       = 25.0      # metros — distancia máxima de operación
 VISION_CONFIDENCE_MIN     = 0.35      # confianza mínima para aceptar detecciones
 
 # ─── SEGUIMIENTO (DISTANCE FOLLOW) ───────────────────────────────────────────
-# Control PD via RC override. Ver distance_follow_controller.py para guía de tuning.
-FOLLOW_TARGET_DISTANCE    = 2.0      # metros — distancia objetivo al objeto
-FOLLOW_DISTANCE_DEADBAND  = 0.30     # metros — zona muerta de distancia
-FOLLOW_LATERAL_DEADBAND   = 0.12     # normalizado — zona muerta lateral
-FOLLOW_KP_DISTANCE        = 40       # PWM/m   — ganancia P longitudinal
-FOLLOW_KD_DISTANCE        = 8        # PWM/(m/s) — ganancia D longitudinal (antioscilación)
-FOLLOW_KP_LATERAL         = 180      # PWM/norm — ganancia P lateral
-FOLLOW_KD_LATERAL         = 30       # PWM/(norm/s) — ganancia D lateral (antioscilación)
-FOLLOW_RC_MAX_OFFSET      = 200      # PWM offset máximo desde neutro (1300–1700)
-FOLLOW_RC_MIN_OFFSET      = 40       # PWM offset mínimo cuando hay error activo
-FOLLOW_DERIV_ALPHA        = 0.4      # EMA filtro derivada (0.0=sin derivada, 1.0=cruda)
-FOLLOW_LOST_TIMEOUT       = 1.5      # segundos — tiempo para considerar pérdida de objetivo
-FOLLOW_MAX_OFFSET_ABS     = 1.0      # normalizado — límite máximo de offset lateral
-FOLLOW_STOP_AFTER_S       = 2        # segundos — tiempo para detener seguimiento tras perder objetivo
-FOLLOW_ALT_STALE_S        = 3.0      # segundos — max antigüedad de altitud en telemetría
+FOLLOW_TARGET_DISTANCE    = 5.0       # metros — distancia objetivo al objeto
+FOLLOW_DISTANCE_DEADBAND  = 0.1      # metros — zona muerta de distancia
+FOLLOW_LATERAL_DEADBAND   = 0.15      # normalizado — zona muerta lateral
+FOLLOW_KP_DISTANCE        = 0.7       # ganancia proporcional para avance/retroceso
+FOLLOW_KP_LATERAL         = 1.15      # ganancia proporcional para corrección lateral
+FOLLOW_MIN_SPEED          = 0.35      # m/s — velocidad mínima en seguimiento
+FOLLOW_MAX_SPEED          = 1       # m/s — velocidad máxima en seguimiento
+FOLLOW_LOST_TIMEOUT       = 2.5       # segundos — tiempo para considerar pérdida de objetivo
+FOLLOW_MAX_OFFSET_ABS     = 1.0       # normalizado — límite máximo de offset
+FOLLOW_STOP_AFTER_S       = 2       # segundos — tiempo para detener seguimiento tras perder objetivo
 
 # ── Detección y análisis de frames ────────────────────────────────────────────
 DETECTION_CONTROL_HZ      = 10.0       # frecuencia de control del seguimiento
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  §V16_API  BALIZAS V16 — API DGT
+#  BALIZAS V16 — API DGT
 # ══════════════════════════════════════════════════════════════════════════════
 
 V16_API_URL = "https://baliza.app/api/dgt"
@@ -209,7 +169,7 @@ def get_v16_activas():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  §SLOTS  SELECCIÓN AUTOMÁTICA DE SLOT HIVEMQ
+#  SELECCIÓN AUTOMÁTICA DE SLOT HIVEMQ
 # ══════════════════════════════════════════════════════════════════════════════
 
 USER_DASHBOARD = None
@@ -343,7 +303,7 @@ MY_ORIGIN    = f"interfazGlobal_{_INST_SUFFIX}"
 AUTOPILOT_SOURCE_ID = f"DashboardTOTAL_autopilot_{_INST_SUFFIX}"
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  §ESTADO  ESTADO GLOBAL
+#  ESTADO GLOBAL
 # ══════════════════════════════════════════════════════════════════════════════
 
 pc               = None
@@ -358,8 +318,7 @@ dron = Dron()
 
 altShowLbl = headingShowLbl = stateShowLbl = None
 speedShowLbl = battShowLbl = gpsShowLbl = None
-connectBtn = arm_takeOffBtn = landBtn = RTLBtn = followBtn = overlayBtn = None
-_debug_overlay = False
+connectBtn = arm_takeOffBtn = landBtn = RTLBtn = followBtn = None
 speedSldr  = gradesSldr = None
 followTargetDistVar = followDeadzoneVar = None
 root_window = None
@@ -480,14 +439,10 @@ _auto_follow_last_target_ts = 0.0
 _auto_follow_dist_k = VISION_DISTANCE_K
 _auto_follow_object_size_m = VISION_OBJECT_SIZE_M
 _auto_follow_camera_vfov_deg = VISION_CAMERA_VFOV_DEG
-_auto_follow_camera_pitch_deg = VISION_CAMERA_PITCH_DEG
 _auto_follow_min_dist = VISION_MIN_DISTANCE
 _auto_follow_max_dist = VISION_MAX_DISTANCE
 _auto_follow_conf_min = VISION_CONFIDENCE_MIN
 _auto_follow_stop_after_s = FOLLOW_STOP_AFTER_S
-
-_follow_alt_m = None
-_follow_alt_ts = 0.0
 
 COCO_GRUPOS = [
     ("Personas",    [("Persona",   0)]),
@@ -514,7 +469,7 @@ camera_service_pc = None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  §SELECTOR_SIM  PANTALLA DE SELECCIÓN DE SIMULACIÓN / DRON
+#  PANTALLA DE SELECCIÓN DE SIMULACIÓN / DRON
 # ══════════════════════════════════════════════════════════════════════════════
 
 def selector_simulacion():
@@ -561,7 +516,7 @@ def selector_simulacion():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  §SELECTOR_MODO  PANTALLA DE SELECCIÓN DE MODO
+#  PANTALLA DE SELECCIÓN DE MODO
 # ══════════════════════════════════════════════════════════════════════════════
 
 def selector_modo():
@@ -617,7 +572,7 @@ def selector_modo():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  §ROL_NEGOC  NEGOCIACIÓN DE ROL
+#  NEGOCIACIÓN DE ROL
 # ══════════════════════════════════════════════════════════════════════════════
 
 MY_CLIENT_ID = MY_ORIGIN
@@ -667,7 +622,7 @@ def limpiar_claim_ground_station():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  §ROL_DIALOGO  DIÁLOGO DE ROL
+#  DIÁLOGO DE ROL
 # ══════════════════════════════════════════════════════════════════════════════
 
 def mostrar_dialogo_rol(es_estacion):
@@ -716,7 +671,7 @@ def mostrar_dialogo_rol(es_estacion):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  §AUTOPILOT  AUTOPILOT SERVICE (integrado)
+#  AUTOPILOT SERVICE (integrado)
 # ══════════════════════════════════════════════════════════════════════════════
 
 client_autopilot = None
@@ -740,7 +695,6 @@ def _parse_json_payload(payload_text: str) -> dict:
     return data
 
 
-# §AUTOPILOT_RC ── callbacks RC y controlador de seguimiento ──────────────────
 def _follow_set_nav_speed(speed, origin):
     dron.changeNavSpeed(float(speed))
 
@@ -751,11 +705,6 @@ def _follow_set_direction(direction, origin):
 
 def _follow_stop_direction(origin):
     dron.go("Stop")
-
-
-def _follow_send_rc(roll_pwm, pitch_pwm):
-    dron.send_rc(roll_pwm, pitch_pwm, 1500, 1500)
-    print(f"[RC] roll={roll_pwm} pitch={pitch_pwm}")
 
 
 def _is_drone_flying() -> bool:
@@ -807,7 +756,6 @@ def _ensure_distance_follow_controller():
             set_direction=_follow_set_direction,
             stop_direction=_follow_stop_direction,
             is_flying=_is_drone_flying,
-            send_rc=_follow_send_rc,
             publish_status=_autopilot_publish_status,
             publish_error=_autopilot_publish_error,
             control_hz=DETECTION_CONTROL_HZ,
@@ -867,7 +815,6 @@ def _stop_telem_if_empty():
         print("[AUTOPILOT] Telemetría detenida (sin suscriptores)")
 
 
-# §AUTOPILOT_MQTT ── MQTT callbacks del autopilot service ─────────────────────
 def autopilot_on_message(cli, userdata, message):
     parts   = message.topic.split("/")
     origin  = parts[0]
@@ -1082,7 +1029,7 @@ def start_autopilot_service():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  §CAMARA  CAMERA SERVICE (integrado)
+#  CAMERA SERVICE (integrado)
 # ══════════════════════════════════════════════════════════════════════════════
 
 class CameraTrack(VideoStreamTrack):
@@ -1123,7 +1070,6 @@ class CameraTrack(VideoStreamTrack):
             cv2.putText(frame, label, (x1, max(y1 - 8, 0)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
 
-        _draw_debug_overlay(frame, self._last_boxes)
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         vf = VideoFrame.from_ndarray(frame_rgb, format="rgb24")
         vf.pts = self.frame_count
@@ -1525,8 +1471,15 @@ def stop_camera_service():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  §DETECCION  DETECCIÓN YOLO — MULTI-CLASE
+#  DETECCIÓN YOLO — MULTI-CLASE
 # ══════════════════════════════════════════════════════════════════════════════
+
+
+# ── Ruta al modelo entrenado para coches (mismo directorio que este script) ────
+_COCHE_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "best.pt")
+_COCHE_CLASS_ID   = 2    # id de Coche en COCO (usado en detect_object_ids)
+_yolo_model_coche = None  # modelo entrenado — solo para coches
+
 
 def load_yolo():
     global yolo_model
@@ -1538,12 +1491,8 @@ def load_yolo():
         print("[DET] Modelo base listo")
 
 
-_COCHE_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "best.pt")
-_COCHE_CLASS_ID   = 2
-_yolo_model_coche = None
-
-
 def load_yolo_coche():
+    """Carga el modelo entrenado para coches si existe, si no usa el base."""
     global _yolo_model_coche
     if _yolo_model_coche is not None:
         return
@@ -1592,6 +1541,7 @@ def toggle_detect(obj_id: int, active: bool):
         detect_object_ids.add(obj_id)
         if yolo_model is None:
             threading.Thread(target=load_yolo, daemon=True).start()
+        # ✅ Si activan coche, cargar también el modelo entrenado
         if obj_id == _COCHE_CLASS_ID:
             threading.Thread(target=load_yolo_coche, daemon=True).start()
         print(f"[DET] +clase {obj_id}  activas={sorted(detect_object_ids)}")
@@ -1609,7 +1559,6 @@ def toggle_detect(obj_id: int, active: bool):
                 _auto_follow_active = False
 
 
-# §DETECCION_DIST ── estimación de distancia desde bounding box ───────────────
 def _estimate_distance_from_bbox(x1, y1, x2, y2, frame_shape, clamp=True):
     img_h = max(1, int(frame_shape[0]))
     box_h = max(1, int(y2 - y1))
@@ -1623,45 +1572,6 @@ def _estimate_distance_from_bbox(x1, y1, x2, y2, frame_shape, clamp=True):
     if clamp:
         return max(_auto_follow_min_dist, min(_auto_follow_max_dist, distance))
     return distance
-
-
-def _update_follow_altitude(alt_value):
-    global _follow_alt_m, _follow_alt_ts
-    try:
-        alt_m = float(alt_value)
-    except Exception:
-        return
-    _follow_alt_m = alt_m
-    _follow_alt_ts = time.time()
-
-
-def _get_follow_altitude():
-    if _follow_alt_m is None:
-        return None
-    if (time.time() - _follow_alt_ts) > FOLLOW_ALT_STALE_S:
-        return None
-    return _follow_alt_m
-
-
-
-def _estimate_horizontal_distance_from_bbox(x1, y1, x2, y2, frame_shape, alt_m=None):
-    slant = _estimate_distance_from_bbox(x1, y1, x2, y2, frame_shape, clamp=False)
-
-    img_h = max(1, int(frame_shape[0]))
-    cy = (y1 + y2) * 0.5
-    norm_y = (cy - (img_h * 0.5)) / max(1.0, img_h * 0.5)
-
-    vfov_rad = math.radians(max(5.0, min(170.0, float(_auto_follow_camera_vfov_deg))))
-    angle_y = norm_y * (vfov_rad * 0.5)
-    pitch_rad = math.radians(float(_auto_follow_camera_pitch_deg))
-    total_pitch = pitch_rad + angle_y
-
-    # Project slant range into the horizontal plane using camera pitch + bbox offset.
-    horizontal = slant * math.cos(total_pitch)
-    if horizontal < 0.0:
-        horizontal = 0.0
-
-    return horizontal, slant, total_pitch
 
 
 def set_detect_object_physical_size(size_text):
@@ -1691,44 +1601,6 @@ def set_detect_object_physical_size(size_text):
         return False
 
 
-def set_follow_target_altitude(alt_text):
-    try:
-        raw = str(alt_text).strip().lower().replace(",", ".")
-        if raw.endswith("m"):
-            raw = raw[:-1].strip()
-        alt_m = float(raw)
-        if alt_m <= 0.0:
-            raise ValueError("altitude must be positive")
-        result = dron.change_altitude(alt_m, blocking=False)
-        if result:
-            print(f"[ALT] Comando altitud enviado: {alt_m:.1f}m")
-        else:
-            print(f"[ALT] Error: dron no esta volando")
-        return result
-    except Exception:
-        print(f"[ALT] Valor invalido '{alt_text}'. Usa metros (ej: 3, 2.5, 5m)")
-        return False
-
-
-def set_camera_pitch_deg(pitch_text):
-    global _auto_follow_camera_pitch_deg
-    try:
-        raw_text = str(pitch_text).strip().lower().replace(",", ".")
-        if raw_text.endswith("deg"):
-            raw_text = raw_text[:-3].strip()
-        value = float(raw_text)
-        if value < -89.0:
-            value = -89.0
-        if value > 89.0:
-            value = 89.0
-        _auto_follow_camera_pitch_deg = value
-        print(f"[CAM] Pitch camara: {_auto_follow_camera_pitch_deg:.1f} deg")
-        return True
-    except Exception:
-        print(f"[CAM] Valor de pitch invalido '{pitch_text}' (usa grados, ej: 0, 30, 90)")
-        return False
-
-
 def _pick_follow_target(detections):
     if not detections:
         return None
@@ -1747,7 +1619,6 @@ def _pick_follow_target(detections):
     return best
 
 
-# §DETECCION_FOLLOW ── lógica de auto-seguimiento ──────────────────────────────
 def _auto_follow_from_detections(frame_shape, detections):
     global _auto_follow_active, _auto_follow_last_target_ts
 
@@ -1761,24 +1632,11 @@ def _auto_follow_from_detections(frame_shape, detections):
         img_h, img_w = int(frame_shape[0]), int(frame_shape[1])
         cx = (x1 + x2) * 0.5
         offset_x = (cx - (img_w * 0.5)) / max(1.0, img_w * 0.5)
-        alt_m = _get_follow_altitude()
-        horiz_m, slant_m, total_pitch = _estimate_horizontal_distance_from_bbox(
-            x1, y1, x2, y2, frame_shape, alt_m=alt_m
-        )
-        if horiz_m is None:
-            distance_m = _auto_follow_max_dist
-            valid = False
-        else:
-            distance_m = max(_auto_follow_min_dist, min(_auto_follow_max_dist, horiz_m))
-            valid = True
+        distance_m = _estimate_distance_from_bbox(x1, y1, x2, y2, frame_shape)
         confidence = float(best.get("conf", 1.0))
         target_id = f"{best.get('label', 'obj')}:{best.get('cls_id', 'na')}"
-        pitch_deg = math.degrees(total_pitch)
-        alt_str = f"{alt_m:.1f}m" if alt_m is not None else "n/a"
-        horiz_str = f"{distance_m:.2f}m" if valid else "n/a"
         print(
-            f"[FOLLOW] Dist horiz={horiz_str} slant={slant_m:.2f}m "
-            f"alt={alt_str} pitch={pitch_deg:.1f}deg "
+            f"[FOLLOW] Distancia estimada={distance_m:.2f}m "
             f"offset_x={offset_x:+.3f} conf={confidence:.2f} target={target_id}"
         )
     else:
@@ -1786,7 +1644,6 @@ def _auto_follow_from_detections(frame_shape, detections):
         distance_m = None
         confidence = 0.0
         target_id = None
-        valid = False
 
     if MODE == "global":
         if client_dashboard is None:
@@ -1803,9 +1660,6 @@ def _auto_follow_from_detections(frame_shape, detections):
                 return
 
             if not _auto_follow_active:
-                if not valid:
-                    print("[FOLLOW] Distancia horizontal invalida; esperando alt/pitch")
-                    return
                 try:
                     startDistanceFollow_global(_follow_config())
                     _auto_follow_active = True
@@ -1819,11 +1673,10 @@ def _auto_follow_from_detections(frame_shape, detections):
                     distance_m=distance_m,
                     offset_x=offset_x,
                     confidence=confidence,
-                    valid=valid,
+                    valid=True,
                     target_id=target_id,
                 )
-                if valid:
-                    _auto_follow_last_target_ts = now
+                _auto_follow_last_target_ts = now
             except Exception as e:
                 print(f"[FOLLOW] Error enviando updateDistanceFollow: {e}")
         return
@@ -1847,9 +1700,6 @@ def _auto_follow_from_detections(frame_shape, detections):
             return
 
         if not _auto_follow_active:
-            if not valid:
-                print("[FOLLOW] Distancia horizontal invalida; esperando alt/pitch")
-                return
             try:
                 controller.start(origin="local", config=_follow_config())
                 _auto_follow_active = True
@@ -1862,31 +1712,13 @@ def _auto_follow_from_detections(frame_shape, detections):
             controller.update_observation({
                 "distance_m": distance_m,
                 "offset_x": offset_x,
-                "valid": valid,
+                "valid": True,
                 "confidence": confidence,
                 "target_id": target_id,
             })
-            if valid:
-                _auto_follow_last_target_ts = now
+            _auto_follow_last_target_ts = now
         except Exception as e:
             print(f"[FOLLOW] Error actualizando seguimiento local: {e}")
-
-
-# §DETECCION_DEBUG ── overlay de depuración en vídeo ──────────────────────────
-def _draw_debug_overlay(frame, boxes):
-    if not _debug_overlay:
-        return
-    h, w = frame.shape[:2]
-    cx_img, cy_img = w // 2, h // 2
-    # Punto amarillo + anillo en centro de imagen
-    cv2.circle(frame, (cx_img, cy_img), 8, (0, 255, 255), -1)
-    cv2.circle(frame, (cx_img, cy_img), 14, (0, 255, 255), 2)
-    # Punto cian + anillo en centro de cada bbox
-    for box in boxes:
-        x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
-        bx, by = (x1 + x2) // 2, (y1 + y2) // 2
-        cv2.circle(frame, (bx, by), 6, (255, 255, 0), -1)
-        cv2.circle(frame, (bx, by), 11, (255, 255, 0), 2)
 
 
 def run_detect(frame):
@@ -1903,11 +1735,13 @@ def run_detect(frame):
 
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
+    # ── Separar clases: coche usa modelo entrenado, resto usa modelo base ─────
     ids_sin_coche  = detect_object_ids - {_COCHE_CLASS_ID}
     detectar_coche = _COCHE_CLASS_ID in detect_object_ids
 
     raw_detections = []
 
+    # Modelo base — todas las clases excepto coche
     if ids_sin_coche:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -1917,18 +1751,23 @@ def run_detect(frame):
             if cls_id in ids_sin_coche:
                 raw_detections.append((xyxy, conf, cls_id))
 
+    # Modelo entrenado — solo coche
     if detectar_coche:
         modelo_coche = _yolo_model_coche if _yolo_model_coche is not None else yolo_model
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             results_coche = modelo_coche(rgb)
+
+        # El modelo entrenado usa id=0 internamente → mapeamos a id=2 (COCO)
         for *xyxy, conf, cls in results_coche.xyxy[0]:
             cls_interno = int(cls.item())
+            # Si es el modelo entrenado (id=0=Coche) o el base (id=2=Coche)
             if _yolo_model_coche is not None and cls_interno == 0:
                 raw_detections.append((xyxy, conf, _COCHE_CLASS_ID))
             elif _yolo_model_coche is None and cls_interno == _COCHE_CLASS_ID:
                 raw_detections.append((xyxy, conf, _COCHE_CLASS_ID))
 
+    # ── Construir boxes y detections ──────────────────────────────────────────
     boxes      = []
     detections = []
     for xyxy, conf, cls_id in raw_detections:
@@ -1945,18 +1784,14 @@ def run_detect(frame):
 
     best_depth_target = _pick_follow_target(detections)
     if best_depth_target is not None:
-        alt_m = _get_follow_altitude()
-        horiz_m, slant_m, total_pitch = _estimate_horizontal_distance_from_bbox(
-            best_depth_target["x1"],
-            best_depth_target["y1"],
-            best_depth_target["x2"],
-            best_depth_target["y2"],
-            frame.shape,
-            alt_m=alt_m,
+        raw_distance_m = _estimate_distance_from_bbox(
+            best_depth_target["x1"], best_depth_target["y1"],
+            best_depth_target["x2"], best_depth_target["y2"],
+            frame.shape, clamp=False,
         )
-        dist_str = f"{horiz_m:.2f}m" if horiz_m is not None else "n/a"
+        distance_m = max(_auto_follow_min_dist, min(_auto_follow_max_dist, raw_distance_m))
         print(
-            f"[DEPTH] Dist horiz={dist_str} slant={slant_m:.2f}m "
+            f"[DEPTH] Distancia estimada={raw_distance_m:.2f}m "
             f"target={best_depth_target.get('label', 'obj')}:{best_depth_target.get('cls_id', 'na')} "
             f"conf={float(best_depth_target.get('conf', 0.0)):.2f}"
         )
@@ -1966,7 +1801,7 @@ def run_detect(frame):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  §WEBRTC  WEBRTC DASHBOARD (receptor de vídeo)
+#  WEBRTC DASHBOARD (receptor de vídeo)
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def show_video(track):
@@ -2131,7 +1966,6 @@ async def show_video_local(track):
                     cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     cv2.putText(img, label, (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                _draw_debug_overlay(img, last_boxes)
                 cv2.imshow("Video Dron", img)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
@@ -2199,7 +2033,6 @@ def start_webrtc_dashboard():
         threading.Thread(target=webrtc_thread_dashboard, daemon=True).start()
 
 
-# §WEBRTC_MQTT ── MQTT message handler del dashboard ──────────────────────────
 def on_mqtt_message_dashboard(cli, userdata, msg):
     global _connect_attempt_token
     global _dashboard_telem_source, _dashboard_telem_source_last_ts, _dashboard_telem_source_last_log
@@ -2212,7 +2045,6 @@ def on_mqtt_message_dashboard(cli, userdata, msg):
         except Exception:
             return
 
-        _update_follow_altitude(data.get("alt"))
         now = time.time()
         source = str(data.get("_source", "unknown"))
         can_switch = (_dashboard_telem_source is None or
@@ -2250,6 +2082,7 @@ def on_mqtt_message_dashboard(cli, userdata, msg):
             data     = json.loads(msg.payload.decode())
             crime_id = str(data.get("crime_id", "?"))
             score    = float(data.get("crime_score", 0))
+            # Guardar score en buffer para cuando llegue el clip
             if crime_id not in _crime_chunks_buffer:
                 _crime_chunks_buffer[crime_id] = {"meta": {}, "chunks": {}, "score": score}
             else:
@@ -2297,6 +2130,7 @@ def on_mqtt_message_dashboard(cli, userdata, msg):
                 b64 = "".join(chunks[i] for i in range(total))
                 raw = base64.b64decode(b64)
                 os.makedirs("clips", exist_ok=True)
+                # ✅ FIX: sanear crime_id ISO para nombre de archivo Windows
                 safe_id   = crime_id.replace(":", "-").replace(".", "_")
                 clip_path = os.path.join("clips", f"recibido_{safe_id}.mp4")
                 with open(clip_path, "wb") as f:
@@ -2327,7 +2161,6 @@ def on_mqtt_message_dashboard(cli, userdata, msg):
 
 
 # ── Lista de marcadores de crimen en el mapa ──────────────────────────────────
-# §WEBRTC_CRIMEN ── alertas de crimen y popup de clip ─────────────────────────
 _crime_markers       = []
 _crime_chunks_buffer = {}   # crime_id → {"meta": {}, "chunks": {}}
 _crime_popup_refs    = {}   # crime_id → popup de espera
@@ -2338,6 +2171,7 @@ def _mostrar_alerta_crimen(data: dict):
 
     crime_id  = str(data.get("crime_id", "?"))
     score     = data.get("crime_score", 0)
+    # ✅ FIX: crime_id es timestamp ISO, mostrarlo legible
     titulo_ts = crime_id[:19].replace("T", " ") if "T" in crime_id else crime_id[:19]
 
     if map_widget and drone_lat is not None and drone_lon is not None:
@@ -2471,6 +2305,7 @@ def _reproducir_clip_en_popup(crime_id: str, clip_path: str, score: float):
 def _actualizar_confirmacion(crime_id: str, confirmado: int):
     """Envía veredicto via MQTT al Analizador y actualiza la DB local si existe."""
     crime_id = str(crime_id)
+    # Enviar veredicto MQTT
     if client_dashboard:
         try:
             topic   = "crime/true" if confirmado else "crime/false"
@@ -2480,6 +2315,7 @@ def _actualizar_confirmacion(crime_id: str, confirmado: int):
             print(f"[CRIME] {crime_id[:19]} → {estado} (MQTT: {topic})")
         except Exception as e:
             print(f"[CRIME] Error publicando veredicto: {e}")
+    # Actualizar DB local si existe
     import sqlite3 as _sq
     db_path = "crimes.db"
     if os.path.exists(db_path):
@@ -2494,7 +2330,7 @@ def _actualizar_confirmacion(crime_id: str, confirmado: int):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  §MAPA  MAPA
+#  MAPA
 # ══════════════════════════════════════════════════════════════════════════════
 
 DEFAULT_LAT = 41.3851
@@ -2602,7 +2438,7 @@ def goto_gps_local(lat, lon):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  §V16_MAPA  BALIZAS V16 — CARGA Y DIBUJO EN EL MAPA
+#  BALIZAS V16 — CARGA Y DIBUJO EN EL MAPA
 # ══════════════════════════════════════════════════════════════════════════════
 
 def load_v16_markers():
@@ -2668,7 +2504,7 @@ def clear_v16_markers():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  §CONTROL  CONTROL DEL DRON
+#  CONTROL DEL DRON
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _reset_btns():
@@ -2686,7 +2522,6 @@ def _set_connected_btn():
     connectBtn.configure(text='Conectado', fg='white', bg='green')
     speedSldr.set(1)
 
-# §CONTROL_GLOBAL ── comandos modo global ─────────────────────────────────────
 def connect_global():
     global _connect_attempt_token
     if REAL_DRONE == False:
@@ -2736,7 +2571,6 @@ def changeNavSpeed_global(e):
     client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/changeNavSpeed', str(speedSldr.get()))
 
 
-# §CONTROL_FOLLOW ── distance follow global ───────────────────────────────────
 def startDistanceFollow_global(config=None):
     payload = json.dumps(config if isinstance(config, dict) else {})
     client_dashboard.publish(f'{MY_ORIGIN}/autopilotServiceDemo/startDistanceFollow', payload)
@@ -2781,18 +2615,15 @@ def _follow_config():
     lateral_deadzone = max(0.0, _read_float(followDeadzoneVar, FOLLOW_LATERAL_DEADBAND))
 
     return {
-        "target_distance":   target_distance,
+        "target_distance": target_distance,
         "distance_deadband": FOLLOW_DISTANCE_DEADBAND,
-        "lateral_deadband":  lateral_deadzone,
-        "kp_distance":       FOLLOW_KP_DISTANCE,
-        "kd_distance":       FOLLOW_KD_DISTANCE,
-        "kp_lateral":        FOLLOW_KP_LATERAL,
-        "kd_lateral":        FOLLOW_KD_LATERAL,
-        "rc_max_offset":     FOLLOW_RC_MAX_OFFSET,
-        "rc_min_offset":     FOLLOW_RC_MIN_OFFSET,
-        "lost_timeout":      FOLLOW_LOST_TIMEOUT,
-        "max_offset_abs":    FOLLOW_MAX_OFFSET_ABS,
-        "deriv_alpha":       FOLLOW_DERIV_ALPHA,
+        "lateral_deadband": lateral_deadzone,
+        "kp_distance": FOLLOW_KP_DISTANCE,
+        "kp_lateral": FOLLOW_KP_LATERAL,
+        "min_speed": FOLLOW_MIN_SPEED,
+        "max_speed": FOLLOW_MAX_SPEED,
+        "lost_timeout": FOLLOW_LOST_TIMEOUT,
+        "max_offset_abs": FOLLOW_MAX_OFFSET_ABS,
     }
 
 
@@ -2856,16 +2687,6 @@ def toggle_follow_mode():
         _start_follow_mode()
 
 
-def toggle_debug_overlay():
-    global _debug_overlay
-    _debug_overlay = not _debug_overlay
-    if overlayBtn is not None:
-        if _debug_overlay:
-            overlayBtn.configure(text="Debug overlay: ON", bg="#2e6b9e")
-        else:
-            overlayBtn.configure(text="Debug overlay: OFF", bg="#555555")
-
-
 def _start_telemetry_watchdog_global():
     global _dashboard_telem_watchdog_started
     if _dashboard_telem_watchdog_started:
@@ -2891,7 +2712,6 @@ def _start_telemetry_watchdog_global():
 
     threading.Thread(target=_run, daemon=True).start()
 
-# §CONTROL_LOCAL ── comandos modo local (dronLink directo) ────────────────────
 def connect_local():
     connectBtn.configure(text='Conectando...', fg='black', bg='yellow')
     try:
@@ -2940,7 +2760,6 @@ def go_local(direction, btn):
 
 def startTelem_local():
     def _update(info):
-        _update_follow_altitude(info.get("alt"))
         altShowLbl['text']     = f"{round(info.get('alt', 0), 1)} m"
         headingShowLbl['text'] = f"{round(info.get('heading', 0), 1)}°"
         stateShowLbl['text']   = info.get('state', '')
@@ -2963,7 +2782,7 @@ def changeNavSpeed_local(e):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  §PANEL_DETECCION  PANEL DE DETECCIÓN MULTI-CLASE
+#  PANEL DE DETECCIÓN MULTI-CLASE
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _build_detection_panel(parent):
@@ -3086,66 +2905,6 @@ def _build_detection_panel(parent):
     row_idx += 1
     tk.Label(
         inner,
-        text="Pitch camara (deg, 0 frontal, 90 zenital):",
-        font=("Arial", 8, "bold"),
-        fg="#333333",
-    ).grid(row=row_idx, column=0, columnspan=2, sticky="w", padx=4, pady=(6, 2))
-
-    pitch_var = tk.StringVar(value=f"{_auto_follow_camera_pitch_deg:.1f}")
-    pitch_entry = tk.Entry(inner, textvariable=pitch_var, width=10, font=("Arial", 8))
-    pitch_entry.grid(row=row_idx, column=2, sticky="w", padx=(0, 4), pady=(6, 2))
-
-    def _apply_pitch(*_):
-        ok = set_camera_pitch_deg(pitch_var.get())
-        if ok:
-            pitch_var.set(f"{_auto_follow_camera_pitch_deg:.1f}")
-
-    tk.Button(
-        inner,
-        text="Aplicar",
-        font=("Arial", 8),
-        bg="#3b7ddd",
-        fg="white",
-        relief="flat",
-        padx=6,
-        pady=1,
-        command=_apply_pitch,
-    ).grid(row=row_idx, column=3, sticky="w", padx=2, pady=(6, 2))
-
-    pitch_entry.bind("<Return>", _apply_pitch)
-
-    row_idx += 1
-    tk.Label(
-        inner,
-        text="Altitud objetivo (m):",
-        font=("Arial", 8, "bold"),
-        fg="#333333",
-    ).grid(row=row_idx, column=0, columnspan=2, sticky="w", padx=4, pady=(6, 2))
-
-    alt_target_var = tk.StringVar(value="3.0")
-    alt_target_entry = tk.Entry(inner, textvariable=alt_target_var, width=10, font=("Arial", 8))
-    alt_target_entry.grid(row=row_idx, column=2, sticky="w", padx=(0, 4), pady=(6, 2))
-
-    def _apply_alt_target(*_):
-        set_follow_target_altitude(alt_target_var.get())
-
-    tk.Button(
-        inner,
-        text="Ir",
-        font=("Arial", 8),
-        bg="#3b7ddd",
-        fg="white",
-        relief="flat",
-        padx=6,
-        pady=1,
-        command=_apply_alt_target,
-    ).grid(row=row_idx, column=3, sticky="w", padx=2, pady=(6, 2))
-
-    alt_target_entry.bind("<Return>", _apply_alt_target)
-
-    row_idx += 1
-    tk.Label(
-        inner,
         text="Ejemplo: persona ≈ 1.70m, móvil ≈ 17cm",
         font=("Arial", 7),
         fg="#666666",
@@ -3155,14 +2914,14 @@ def _build_detection_panel(parent):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  §GUI  GUI
+#  GUI
 # ══════════════════════════════════════════════════════════════════════════════
 
 def crear_ventana(modo):
     global client_dashboard, IS_GROUND_STATION, root_window
     global altShowLbl, headingShowLbl, stateShowLbl
     global speedShowLbl, battShowLbl, gpsShowLbl
-    global connectBtn, arm_takeOffBtn, landBtn, RTLBtn, followBtn, overlayBtn
+    global connectBtn, arm_takeOffBtn, landBtn, RTLBtn, followBtn
     global speedSldr, gradesSldr, previousBtn
 
     if modo == "global":
@@ -3274,7 +3033,6 @@ def crear_ventana(modo):
     connectBtn     = btn("Conectar",  _connect, 0)
     arm_takeOffBtn = btn("Despegar",  _takeoff, 1)
     followBtn      = btn("Modo seguimiento", toggle_follow_mode, 2)
-    overlayBtn     = btn("Debug overlay: OFF", toggle_debug_overlay, 3, bg="#555555")
     landBtn        = btn("Aterrizar", _land,    5, col=0, cs=1)
     RTLBtn         = btn("RTL",       _RTL,     5, col=1, cs=1)
 
@@ -3468,7 +3226,7 @@ def crear_ventana(modo):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  §MAIN  ENTRY POINT
+#  ENTRY POINT
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
