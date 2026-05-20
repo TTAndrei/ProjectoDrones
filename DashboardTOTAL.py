@@ -821,6 +821,11 @@ def _ensure_distance_follow_controller():
     return _distance_follow
 
 
+_distance_sensor_lock = threading.Lock()
+_distance_info = None
+_distance_sensor_active = False
+
+
 def autopilot_publish_event(event, origin: str = None):
     cli = client_autopilot
     if cli is None:
@@ -978,11 +983,26 @@ def autopilot_on_message(cli, userdata, message):
             )
             return
         follow_controller.start(origin=origin, config=cfg)
+        # Configura y arranca la lectura del sensor de distancia cuando se inicia el seguimiento.
+        global _distance_sensor_active
+        if not _distance_sensor_active:
+            dron.ConfigureDistanceSensor('TFmini')
+
+            def _update_distance_info(distance_info):
+                global _distance_info
+                with _distance_sensor_lock:
+                    _distance_info = distance_info
+                print(f"[AUTOPILOT] Distance sensor info: {distance_info}")
+                return distance_info
+
+            dron.send_distance_sensor_info(_update_distance_info, freq=10)
+            _distance_sensor_active = True
         _autopilot_publish_status(
             "Seguimiento por distancia activado",
             origin=origin,
             mode="distance-follow",
             config=follow_controller.snapshot_config(),
+            distance=_distance_info,
         )
 
     elif command == 'updateDistanceFollow':
@@ -1022,6 +1042,10 @@ def autopilot_on_message(cli, userdata, message):
         except Exception:
             pass
         follow_controller.stop(reason=reason, origin=origin)
+        global _distance_sensor_active
+        if _distance_sensor_active:
+            dron.stop_sending_distance_sensor_info()
+            _distance_sensor_active = False
         _autopilot_publish_status(
             "Seguimiento por distancia detenido",
             origin=origin,
