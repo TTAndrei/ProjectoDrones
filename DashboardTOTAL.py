@@ -763,6 +763,9 @@ def _is_drone_flying() -> bool:
 
 
 def _autopilot_publish_status(message: str, origin: str = None, level: str = "info", **extra):
+    cli = client_autopilot
+    if cli is None:
+        return
     if origin is None:
         with _telem_lock:
             origin = next(iter(_telem_subscribers), None)
@@ -776,12 +779,15 @@ def _autopilot_publish_status(message: str, origin: str = None, level: str = "in
     }
     payload.update(extra)
     try:
-        client_autopilot.publish(_autopilot_topic(origin) + '/status', json.dumps(payload))
+        cli.publish(_autopilot_topic(origin) + '/status', json.dumps(payload))
     except Exception as e:
         print(f"[AUTOPILOT] Error publicando status: {e}")
 
 
 def _autopilot_publish_error(message: str, origin: str = None, **extra):
+    cli = client_autopilot
+    if cli is None:
+        return
     if origin is None:
         with _telem_lock:
             origin = next(iter(_telem_subscribers), None)
@@ -794,7 +800,7 @@ def _autopilot_publish_error(message: str, origin: str = None, **extra):
     }
     payload.update(extra)
     try:
-        client_autopilot.publish(_autopilot_topic(origin) + '/error', json.dumps(payload))
+        cli.publish(_autopilot_topic(origin) + '/error', json.dumps(payload))
     except Exception as e:
         print(f"[AUTOPILOT] Error publicando error: {e}")
 
@@ -816,6 +822,9 @@ def _ensure_distance_follow_controller():
 
 
 def autopilot_publish_event(event, origin: str = None):
+    cli = client_autopilot
+    if cli is None:
+        return
     if origin is None:
         with _telem_lock:
             origin = next(iter(_telem_subscribers), None)
@@ -823,7 +832,7 @@ def autopilot_publish_event(event, origin: str = None):
         return
     topic = _autopilot_topic(origin) + '/' + event
     try:
-        client_autopilot.publish(topic)
+        cli.publish(topic)
         print(f"[AUTOPILOT] → {topic}")
     except Exception as e:
         print(f"[AUTOPILOT] Error publicando evento: {e}")
