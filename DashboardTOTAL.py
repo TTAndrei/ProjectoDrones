@@ -102,6 +102,7 @@ T_AUTOPILOT_CLAIM = "autopilot/claim"
 T_CRIME_ALERT     = "crime/alert"
 T_CRIME_CHUNK     = "crime/clip/chunk"
 T_SLOT_PREFIX     = "slot/ocupado/"
+T_DISTANCE_INFO   = "autopilotServiceDemo/distanceSensorInfo"
 
 TCP_HOST = "localhost"
 TCP_PORT = 9999
@@ -994,6 +995,13 @@ def autopilot_on_message(cli, userdata, message):
                 with _distance_sensor_lock:
                     _distance_info = distance_info
                 print(f"[AUTOPILOT] Distance sensor info: {distance_info}")
+                cli = client_autopilot
+                if cli is not None:
+                    try:
+                        payload = json.dumps(distance_info) if isinstance(distance_info, dict) else json.dumps({"data": str(distance_info)})
+                        cli.publish(T_DISTANCE_INFO, payload)
+                    except Exception as e:
+                        print(f"[AUTOPILOT] Error publicando distancia MQTT: {e}")
                 return distance_info
 
             dron.send_distance_sensor_info(_update_distance_info, freq=10)
@@ -2237,7 +2245,7 @@ def start_webrtc_dashboard():
 def on_mqtt_message_dashboard(cli, userdata, msg):
     global _connect_attempt_token
     global _dashboard_telem_source, _dashboard_telem_source_last_ts, _dashboard_telem_source_last_log
-    global _dashboard_last_telem_rx_ts
+    global _dashboard_last_telem_rx_ts, _distance_info
     topic = msg.topic
 
     if topic == f'autopilotServiceDemo/{MY_ORIGIN}/telemetryInfo':
@@ -2359,6 +2367,14 @@ def on_mqtt_message_dashboard(cli, userdata, msg):
         _ui_call(RTLBtn.configure, text='En tierra', fg='white', bg='green')
         _ui_call(arm_takeOffBtn.configure, text='Despegar', fg='black', bg='dark orange')
         _ui_call(landBtn.configure, text='Aterrizar', fg='black', bg='dark orange')
+
+    elif topic == T_DISTANCE_INFO:
+        try:
+            data = json.loads(msg.payload)
+            with _distance_sensor_lock:
+                _distance_info = data
+        except Exception as e:
+            print(f"[DASHBOARD] Error procesando distanceSensorInfo: {e}")
 
 
 # ── Lista de marcadores de crimen en el mapa ──────────────────────────────────
@@ -3259,6 +3275,7 @@ def crear_ventana(modo):
         client_dashboard.subscribe(T_CRIME_CHUNK)
         client_dashboard.subscribe(f'{T_CRIME_CHUNK}/start')
         client_dashboard.subscribe(f'{T_CRIME_CHUNK}/end')
+        client_dashboard.subscribe(T_DISTANCE_INFO)
         client_dashboard.reconnect_delay_set(min_delay=1, max_delay=30)
         client_dashboard.loop_start()
         _start_telemetry_watchdog_global()

@@ -67,9 +67,10 @@ TOPIC_TELEM_SUB  = f"autopilotServiceDemo/{MY_ORIGIN}/telemetryInfo"
 TOPIC_EVENTS_SUB = f"autopilotServiceDemo/{MY_ORIGIN}/#"
 
 # Topics WebRTC de señalización (igual que el dashboard Python)
-T_CAM_REQUEST = "webrtc/request"
-T_CAM_OFFER   = f"webrtc/offer/{MY_ORIGIN}"
-T_CAM_ANSWER  = f"webrtc/answer/{MY_ORIGIN}"
+T_CAM_REQUEST   = "webrtc/request"
+T_CAM_OFFER     = f"webrtc/offer/{MY_ORIGIN}"
+T_CAM_ANSWER    = f"webrtc/answer/{MY_ORIGIN}"
+TOPIC_DISTANCE_SUB = "autopilotServiceDemo/distanceSensorInfo"
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  ESTADO COMPARTIDO
@@ -100,6 +101,10 @@ _pending_offer: dict | None = None   # {"sdp": "...", "type": "offer"}
 _offer_event   = Event()             # se dispara cuando llega la oferta
 _offer_lock    = Lock()
 
+# Información del sensor de distancia recibida vía MQTT
+_distance_info_remote: dict | None = None
+_distance_info_remote_lock = Lock()
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  MQTT
 # ══════════════════════════════════════════════════════════════════════════════
@@ -129,8 +134,11 @@ def on_connect(client, userdata, flags, rc):
         client.subscribe(TOPIC_EVENTS_SUB)
         # Oferta WebRTC del CameraService (retain=True → llega aunque tardemos)
         client.subscribe(T_CAM_OFFER)
+        # Información del sensor de distancia emitida por el autopilot service
+        client.subscribe(TOPIC_DISTANCE_SUB)
         print(f"[MQTT] Suscrito a {TOPIC_EVENTS_SUB}")
         print(f"[MQTT] Suscrito a {T_CAM_OFFER}")
+        print(f"[MQTT] Suscrito a {TOPIC_DISTANCE_SUB}")
 
 
 def on_disconnect(client, userdata, rc):
@@ -141,10 +149,18 @@ def on_disconnect(client, userdata, rc):
 
 
 def on_message(client, userdata, msg):
-    global _pending_offer
+    global _pending_offer, _distance_info_remote
     try:
         payload = msg.payload.decode("utf-8")
         topic   = msg.topic
+
+        # ── Sensor de distancia (broadcast desde autopilot service) ────────
+        if topic == TOPIC_DISTANCE_SUB:
+            if payload:
+                data = json.loads(payload)
+                with _distance_info_remote_lock:
+                    _distance_info_remote = data
+            return
 
         # ── Señalización WebRTC ────────────────────────────────────────────
         if topic == T_CAM_OFFER:
@@ -299,6 +315,12 @@ def drone_logo():
 def http_telemetry():
     with telemetry_lock:
         return jsonify(dict(telemetry))
+
+
+@app.route("/distance")
+def http_distance():
+    with _distance_info_remote_lock:
+        return jsonify({"distance": _distance_info_remote})
 
 
 @app.route("/gateway/disconnect", methods=["POST"])
