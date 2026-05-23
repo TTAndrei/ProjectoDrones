@@ -371,6 +371,7 @@ _dashboard_telem_source_last_log = 0.0
 _dashboard_last_telem_rx_ts = 0.0
 _dashboard_last_telem_request_ts = 0.0
 _dashboard_telem_watchdog_started = False
+_distance_sensor_active = False
 
 # ── Terminal integrada ────────────────────────────────────────────────────────
 _stdout_redirector = None
@@ -1042,7 +1043,6 @@ def autopilot_on_message(cli, userdata, message):
         except Exception:
             pass
         follow_controller.stop(reason=reason, origin=origin)
-        global _distance_sensor_active
         if _distance_sensor_active:
             dron.stop_sending_distance_sensor_info()
             _distance_sensor_active = False
