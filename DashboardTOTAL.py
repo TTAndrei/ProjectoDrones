@@ -2460,27 +2460,33 @@ def _reproducir_clip_en_popup(crime_id: str, clip_path: str, score: float):
     btn_f = tk.Frame(popup, bg="#212121")
     btn_f.pack(fill="x", padx=20, pady=8)
 
-    def _confirmar():
-        _actualizar_confirmacion(crime_id, 1)
-        status_lbl.config(text="✓ Confirmado como crimen", fg="#4caf50")
-        cb.config(state="disabled"); db.config(state="disabled")
+    if IS_GROUND_STATION:
+        def _confirmar():
+            _actualizar_confirmacion(crime_id, 1)
+            status_lbl.config(text="✓ Confirmado como crimen", fg="#4caf50")
+            cb.config(state="disabled"); db.config(state="disabled")
 
-    def _descartar():
-        _actualizar_confirmacion(crime_id, 0)
-        status_lbl.config(text="✗ Marcado como falso positivo", fg="#aaaaaa")
-        cb.config(state="disabled"); db.config(state="disabled")
+        def _descartar():
+            _actualizar_confirmacion(crime_id, 0)
+            status_lbl.config(text="✗ Marcado como falso positivo", fg="#aaaaaa")
+            cb.config(state="disabled"); db.config(state="disabled")
 
-    cb = tk.Button(btn_f, text="✓ Confirmar crimen",
-                   font=("Arial", 10, "bold"), bg="#e94560", fg="white",
-                   relief="flat", padx=16, pady=8, cursor="hand2",
-                   command=_confirmar)
-    cb.pack(side="left", expand=True, fill="x", padx=4)
+        cb = tk.Button(btn_f, text="✓ Confirmar crimen",
+                       font=("Arial", 10, "bold"), bg="#e94560", fg="white",
+                       relief="flat", padx=16, pady=8, cursor="hand2",
+                       command=_confirmar)
+        cb.pack(side="left", expand=True, fill="x", padx=4)
 
-    db = tk.Button(btn_f, text="✗ Falso positivo",
-                   font=("Arial", 10, "bold"), bg="#424242", fg="white",
-                   relief="flat", padx=16, pady=8, cursor="hand2",
-                   command=_descartar)
-    db.pack(side="right", expand=True, fill="x", padx=4)
+        db = tk.Button(btn_f, text="✗ Falso positivo",
+                       font=("Arial", 10, "bold"), bg="#424242", fg="white",
+                       relief="flat", padx=16, pady=8, cursor="hand2",
+                       command=_descartar)
+        db.pack(side="right", expand=True, fill="x", padx=4)
+    else:
+        tk.Label(btn_f,
+                 text="👁  Solo observación — el veredicto lo emite la Estación de Tierra",
+                 font=("Arial", 9, "italic"), bg="#212121", fg="#777777",
+                 pady=8).pack(expand=True)
 
     def _play():
         cap = cv2.VideoCapture(clip_path)

@@ -72,6 +72,13 @@ T_CAM_OFFER     = f"webrtc/offer/{MY_ORIGIN}"
 T_CAM_ANSWER    = f"webrtc/answer/{MY_ORIGIN}"
 TOPIC_DISTANCE_SUB = "autopilotServiceDemo/distanceSensorInfo"
 
+# Topics del pipeline de crimen (Analizador → todos los viewers)
+T_CRIME_ALERT = "crime/alert"
+T_CRIME_CHUNK = "crime/clip/chunk"
+
+# Carpeta local donde se guardan los clips reconstruidos
+CRIME_CLIPS_DIR = os.path.join(BASE_DIR, "crime_clips")
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  ESTADO COMPARTIDO
 # ══════════════════════════════════════════════════════════════════════════════
@@ -105,6 +112,16 @@ _offer_lock    = Lock()
 _distance_info_remote: dict | None = None
 _distance_info_remote_lock = Lock()
 
+# Pipeline de crimen — alertas recibidas y clips reconstruidos
+_crime_alerts: list = []          # [{"crime_id", "timestamp", "crime_score", ...}, ...]
+_crime_alerts_lock = Lock()
+_crime_chunks_buffer: dict = {}   # crime_id → {"meta": {}, "chunks": {}}
+_crime_chunks_lock = Lock()
+_crime_clips_ready: dict = {}     # crime_id → ruta local del clip guardado
+_crime_clips_lock = Lock()
+
+os.makedirs(CRIME_CLIPS_DIR, exist_ok=True)
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  MQTT
 # ══════════════════════════════════════════════════════════════════════════════
@@ -136,9 +153,15 @@ def on_connect(client, userdata, flags, rc):
         client.subscribe(T_CAM_OFFER)
         # Información del sensor de distancia emitida por el autopilot service
         client.subscribe(TOPIC_DISTANCE_SUB)
+        # Pipeline de crimen (solo observación, sin veredicto)
+        client.subscribe(T_CRIME_ALERT)
+        client.subscribe(T_CRIME_CHUNK)
+        client.subscribe(f"{T_CRIME_CHUNK}/start")
+        client.subscribe(f"{T_CRIME_CHUNK}/end")
         print(f"[MQTT] Suscrito a {TOPIC_EVENTS_SUB}")
         print(f"[MQTT] Suscrito a {T_CAM_OFFER}")
         print(f"[MQTT] Suscrito a {TOPIC_DISTANCE_SUB}")
+        print(f"[MQTT] Suscrito a crime/alert + crime/clip/chunk")
 
 
 def on_disconnect(client, userdata, rc):
@@ -146,6 +169,36 @@ def on_disconnect(client, userdata, rc):
         telemetry["gateway_mqtt_connected"] = False
         telemetry["last_update_ts"] = int(time.time())
     print(f"[MQTT] Desconectado rc={rc}")
+
+
+def _reconstruct_clip(crime_id: str):
+    """Reconstruye el clip desde los chunks base64 y lo guarda en disco."""
+    import base64
+    with _crime_chunks_lock:
+        buf = _crime_chunks_buffer.get(crime_id)
+    if not buf:
+        return
+    meta   = buf.get("meta", {})
+    chunks = buf.get("chunks", {})
+    total  = meta.get("total_chunks", 0)
+    if len(chunks) < total:
+        print(f"[CRIME] Chunks incompletos para {crime_id[:19]}: {len(chunks)}/{total}")
+        return
+    try:
+        b64  = "".join(chunks[i] for i in range(total))
+        raw  = base64.b64decode(b64)
+        filename = meta.get("filename") or f"crime_{crime_id.replace(':', '-').replace('.', '_')}.mp4"
+        path = os.path.join(CRIME_CLIPS_DIR, filename)
+        with open(path, "wb") as f:
+            f.write(raw)
+        with _crime_clips_lock:
+            _crime_clips_ready[crime_id] = path
+        # Limpiar buffer de chunks (ya no lo necesitamos)
+        with _crime_chunks_lock:
+            _crime_chunks_buffer.pop(crime_id, None)
+        print(f"[CRIME] Clip reconstruido: {path} ({len(raw)/1024/1024:.2f} MB)")
+    except Exception as e:
+        print(f"[CRIME] Error reconstruyendo clip {crime_id[:19]}: {e}")
 
 
 def on_message(client, userdata, msg):
@@ -160,6 +213,56 @@ def on_message(client, userdata, msg):
                 data = json.loads(payload)
                 with _distance_info_remote_lock:
                     _distance_info_remote = data
+            return
+
+        # ── Pipeline de crimen (solo observación) ─────────────────────────
+        if topic == T_CRIME_ALERT:
+            if payload:
+                data = json.loads(payload)
+                crime_id = str(data.get("crime_id", ""))
+                if crime_id:
+                    with _crime_alerts_lock:
+                        # Evitar duplicados
+                        if not any(a["crime_id"] == crime_id for a in _crime_alerts):
+                            _crime_alerts.append(data)
+                    print(f"[CRIME] Alerta recibida: {crime_id[:19]} "
+                          f"score={data.get('crime_score', 0):.1%}")
+            return
+
+        if topic == f"{T_CRIME_CHUNK}/start":
+            if payload:
+                meta     = json.loads(payload)
+                crime_id = str(meta.get("crime_id", ""))
+                if crime_id:
+                    with _crime_chunks_lock:
+                        _crime_chunks_buffer[crime_id] = {"meta": meta, "chunks": {}}
+                    print(f"[CRIME] Recibiendo clip {crime_id[:19]} "
+                          f"({meta.get('total_chunks', '?')} chunks, "
+                          f"{meta.get('size_bytes', 0)/1024/1024:.2f} MB)")
+            return
+
+        if topic == T_CRIME_CHUNK:
+            if payload:
+                data     = json.loads(payload)
+                crime_id = str(data.get("crime_id", ""))
+                idx      = int(data.get("chunk_index", 0))
+                if crime_id:
+                    with _crime_chunks_lock:
+                        if crime_id not in _crime_chunks_buffer:
+                            _crime_chunks_buffer[crime_id] = {"meta": {}, "chunks": {}}
+                        _crime_chunks_buffer[crime_id]["chunks"][idx] = data.get("data", "")
+            return
+
+        if topic == f"{T_CRIME_CHUNK}/end":
+            if payload:
+                data     = json.loads(payload)
+                crime_id = str(data.get("crime_id", ""))
+                if crime_id:
+                    threading.Thread(
+                        target=_reconstruct_clip,
+                        args=(crime_id,),
+                        daemon=True,
+                    ).start()
             return
 
         # ── Señalización WebRTC ────────────────────────────────────────────
@@ -321,6 +424,61 @@ def http_telemetry():
 def http_distance():
     with _distance_info_remote_lock:
         return jsonify({"distance": _distance_info_remote})
+
+
+# ── Pipeline de crimen — solo observación ────────────────────────────────────
+
+@app.route("/crime/alerts")
+def http_crime_alerts():
+    """
+    Devuelve la lista de alertas de crimen recibidas.
+    El cliente web hace polling aquí para saber si hay un nuevo crimen.
+    Cada alerta incluye: crime_id, timestamp, crime_score, clip_ready (bool).
+    """
+    with _crime_alerts_lock:
+        alerts = list(_crime_alerts)
+    with _crime_clips_lock:
+        ready_ids = set(_crime_clips_ready.keys())
+    for a in alerts:
+        a["clip_ready"] = a.get("crime_id", "") in ready_ids
+    return jsonify({"alerts": alerts})
+
+
+@app.route("/crime/clip/<crime_id>")
+def http_crime_clip(crime_id: str):
+    """
+    Sirve el clip de vídeo de un crimen concreto.
+    Devuelve 404 si el crime_id no existe y 202 si aún no ha terminado
+    de reconstruirse.
+    """
+    from flask import send_file
+    with _crime_clips_lock:
+        path = _crime_clips_ready.get(crime_id)
+    if path is None:
+        # Comprobar si está en curso (chunks llegando)
+        with _crime_chunks_lock:
+            in_progress = crime_id in _crime_chunks_buffer
+        if in_progress:
+            return jsonify({"status": "assembling"}), 202
+        return jsonify({"error": "clip no encontrado"}), 404
+    if not os.path.exists(path):
+        return jsonify({"error": "archivo no disponible"}), 404
+    return send_file(path, mimetype="video/mp4", as_attachment=False)
+
+
+@app.route("/crime/alerts/<crime_id>/ack", methods=["POST"])
+def http_crime_ack(crime_id: str):
+    """
+    El cliente confirma que ha visto la alerta y la elimina de la cola.
+    No envía ningún veredicto al Analizador (rol solo observación).
+    """
+    with _crime_alerts_lock:
+        before = len(_crime_alerts)
+        _crime_alerts[:] = [a for a in _crime_alerts if a.get("crime_id") != crime_id]
+        removed = before - len(_crime_alerts)
+    print(f"[CRIME] Alerta {crime_id[:19]} confirmada por cliente web "
+          f"({'eliminada' if removed else 'no encontrada'})")
+    return ("", 204)
 
 
 @app.route("/gateway/disconnect", methods=["POST"])
