@@ -146,67 +146,181 @@ FOLLOW_ALT_STALE_S        = 3.0      # segundos — max antigüedad de altitud e
 DETECTION_CONTROL_HZ      = 10.0       # frecuencia de control del seguimiento
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  §V16_API  BALIZAS V16 — API DGT
+#  §V16_API  BALIZAS V16 — API DGT (DATEX II v3)
 # ══════════════════════════════════════════════════════════════════════════════
 
-V16_API_URL = "https://baliza.app/api/dgt"
+import xml.etree.ElementTree as ET
+import unicodedata
+from datetime import timezone
+
+V16_API_URL = "https://nap.dgt.es/datex2/v3/dgt/SituationPublication/datex2_v36.xml"
 V16_HEADERS = {
     "User-Agent": "Mozilla/5.0",
-    "Accept": "application/json",
-    "Referer": "https://baliza.app/",
-    "Origin": "https://baliza.app"
+    "Accept": "application/xml,text/xml,*/*",
 }
 
 
-def _extraer_lista_v16(data):
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        for v in data.values():
-            if isinstance(v, list):
-                return v
-    return []
+def _v16_local_name(tag):
+    return tag.split("}", 1)[-1] if "}" in tag else tag
+
+
+def _v16_norm_name(tag):
+    return _v16_local_name(tag).lower()
+
+
+def _v16_first_text(elem, posibles):
+    posibles = {p.lower() for p in posibles}
+    for child in elem.iter():
+        if _v16_norm_name(child.tag) in posibles and child.text and child.text.strip():
+            return child.text.strip()
+    return None
+
+
+def _v16_normalizar_texto(txt):
+    if not txt:
+        return ""
+    txt = str(txt).lower()
+    txt = unicodedata.normalize("NFD", txt)
+    return "".join(c for c in txt if unicodedata.category(c) != "Mn")
+
+
+def _v16_all_text(elem):
+    return " ".join(t.strip() for t in elem.itertext() if t and t.strip())
+
+
+def _v16_parse_fecha_dgt(txt):
+    if not txt:
+        return None
+    txt = txt.strip()
+    try:
+        if txt.endswith("Z"):
+            txt = txt[:-1] + "+00:00"
+        return datetime.fromisoformat(txt)
+    except Exception:
+        return None
+
+
+def _v16_get_xsi_type(elem):
+    for k, v in elem.attrib.items():
+        if k.endswith("}type") or k == "type":
+            return v or ""
+    return ""
+
+
+# Filtros: descartamos eventos claramente ajenos a una baliza V16 / vehículo parado.
+_V16_EXCLUIR = [
+    "roadworks", "road works", "maintenance", "weather", "meteorological",
+    "abnormaltraffic", "abnormal traffic", "networkmanagement", "network management",
+    "generalinstruction", "general instruction", "poorroadinfrastructure",
+    "poor road infrastructure", "trafficflow", "traffic flow", "congestion",
+    "retencion", "retenciones", "restriccion", "restricciones",
+    "corte total", "carril cerrado", "carriles cerrados", "obras",
+    "meteorologia", "viento", "nieve", "hielo", "lluvia", "niebla",
+]
+
+# Sólo aceptamos vehículo detenido / averiado / parado / obstáculo por vehículo.
+_V16_INCLUIR = [
+    "vehicleobstruction", "vehicle obstruction",
+    "brokendownvehicle", "broken down vehicle",
+    "stationaryvehicle", "stationary vehicle",
+    "stoppedvehicle", "stopped vehicle",
+    "vehicleoffroad", "vehicle off road",
+    "abandonedvehicle", "abandoned vehicle",
+    "vehicleonfire", "vehicle on fire",
+    "disabled vehicle", "immobilised vehicle", "immobilized vehicle",
+    "vehiculo averiado", "vehiculo detenido", "vehiculo parado",
+    "vehiculo inmovilizado", "vehiculo obstaculizando",
+    "vehiculo en arcen", "vehiculo en el arcen",
+    "vehiculo incendiado", "vehiculo ardiendo",
+    "vehiculo siniestrado", "vehiculo accidentado",
+    "averia de vehiculo", "averia vehiculo",
+    "coche averiado", "turismo averiado",
+    "camion averiado", "furgoneta averiada", "coche incendiado",
+    "obstaculo por vehiculo", "obstruccion por vehiculo",
+]
 
 
 def get_v16_activas():
-    """Consulta la API DGT y devuelve lista de balizas V16 con coordenadas."""
+    """Consulta el feed DATEX II de la DGT y devuelve incidencias activas
+    compatibles con baliza V16 (vehículo parado / averiado / siniestrado)."""
     try:
-        r = requests.get(V16_API_URL, headers=V16_HEADERS, timeout=10)
-        items = _extraer_lista_v16(r.json())
-        v16 = []
-        for item in items:
-            if "v16" not in str(item).lower():
-                continue
-            lat = (item.get("lat") or item.get("latitude") or item.get("latitud")
-                   or (item.get("position") or {}).get("lat"))
-            lon = (item.get("lng") or item.get("lon") or item.get("longitude")
-                   or (item.get("position") or {}).get("lng"))
-            if lat and lon:
-                timestamp_str = (item.get("date") or item.get("timestamp")
-                                 or item.get("fecha") or item.get("updated_at"))
-                dt = None
-                if timestamp_str:
-                    try:
-                        if isinstance(timestamp_str, str):
-                            try:
-                                dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                            except ValueError:
-                                dt = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
-                        elif isinstance(timestamp_str, (int, float)):
-                            dt = datetime.fromtimestamp(timestamp_str)
-                    except Exception:
-                        pass
-                if dt and datetime.now() - dt <= timedelta(minutes=10):
-                    v16.append({
-                        "lat": float(lat),
-                        "lon": float(lon),
-                        "raw": item,
-                        "timestamp": timestamp_str
-                    })
-        return v16
+        r = requests.get(V16_API_URL, headers=V16_HEADERS, timeout=30)
+        r.raise_for_status()
+        root = ET.fromstring(r.content)
     except Exception as e:
         print(f"[V16] Error obteniendo balizas: {e}")
         return []
+
+    puntos = []
+    vistos = set()
+    ahora = datetime.now(timezone.utc)
+
+    for record in root.iter():
+        if _v16_norm_name(record.tag) != "situationrecord":
+            continue
+
+        tipo_xsi = _v16_get_xsi_type(record)
+        tipo_obstruccion = _v16_first_text(record, [
+            "vehicleObstructionType", "obstructionType",
+        ])
+
+        lat = _v16_first_text(record, ["latitude"])
+        lon = _v16_first_text(record, ["longitude"])
+        if not lat or not lon:
+            continue
+
+        status = _v16_first_text(record, ["validityStatus"])
+        status_l = (status or "").lower()
+        if status_l and status_l not in ["active", "definedbyvaliditytime"]:
+            continue
+
+        fin = _v16_first_text(record, [
+            "overallEndTime", "validityTimeSpecificationEndTime",
+        ])
+        fecha_fin = _v16_parse_fecha_dgt(fin)
+        if fecha_fin and fecha_fin < ahora:
+            continue
+
+        texto_total = " ".join([
+            _v16_normalizar_texto(_v16_all_text(record)),
+            _v16_normalizar_texto(tipo_xsi),
+            _v16_normalizar_texto(tipo_obstruccion),
+        ])
+
+        if any(x in texto_total for x in _V16_EXCLUIR):
+            continue
+        if not any(x in texto_total for x in _V16_INCLUIR):
+            continue
+
+        try:
+            lat_f = float(lat)
+            lon_f = float(lon)
+        except Exception:
+            continue
+
+        clave = (round(lat_f, 5), round(lon_f, 5))
+        if clave in vistos:
+            continue
+        vistos.add(clave)
+
+        puntos.append({
+            "lat": lat_f,
+            "lon": lon_f,
+            "road": _v16_first_text(record, ["roadName"]),
+            "province": _v16_first_text(record, ["province"]),
+            "municipality": _v16_first_text(record, ["municipality"]),
+            "km": _v16_first_text(record, ["kilometerPoint"]),
+            "status": status,
+            "tipo": tipo_xsi,
+            "tipo_obstruccion": tipo_obstruccion,
+            "timestamp": _v16_first_text(record, [
+                "situationRecordVersionTime",
+                "situationRecordCreationTime",
+                "overallStartTime",
+            ]),
+        })
+
+    return puntos
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2684,17 +2798,16 @@ def load_v16_markers():
             v16_markers = []
 
             for b in balizas:
-                # Construir texto de detalle para el tooltip/texto del marcador
-                detalles = []
-                for k, v in b["raw"].items():
-                    if not isinstance(v, dict) and k not in ("lat", "lon", "lng",
-                                                              "latitude", "longitude"):
-                        detalles.append(f"{k}: {v}")
-                detalle_txt = " | ".join(detalles[:4])   # máximo 4 campos en el label
+                etiqueta_partes = ["⚠ V16"]
+                if b.get("road"):
+                    etiqueta_partes.append(str(b["road"]))
+                if b.get("km"):
+                    etiqueta_partes.append(f"km {b['km']}")
+                etiqueta = " · ".join(etiqueta_partes)
 
                 m = map_widget.set_marker(
                     b["lat"], b["lon"],
-                    text=f"⚠ V16",
+                    text=etiqueta,
                     marker_color_circle="#f57c00",
                     marker_color_outside="#e65100",
                     font=("Arial", 7, "bold"),
