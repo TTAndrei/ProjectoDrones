@@ -102,6 +102,7 @@ T_AUTOPILOT_CLAIM = "autopilot/claim"
 T_CRIME_ALERT     = "crime/alert"
 T_CRIME_CHUNK     = "crime/clip/chunk"
 T_SLOT_PREFIX     = "slot/ocupado/"
+T_DISTANCE_INFO   = "autopilotServiceDemo/distanceSensorInfo"
 
 TCP_HOST = "localhost"
 TCP_PORT = 9999
@@ -371,6 +372,7 @@ _dashboard_telem_source_last_log = 0.0
 _dashboard_last_telem_rx_ts = 0.0
 _dashboard_last_telem_request_ts = 0.0
 _dashboard_telem_watchdog_started = False
+_distance_sensor_active = False
 
 # ── Terminal integrada ────────────────────────────────────────────────────────
 _stdout_redirector = None
@@ -821,6 +823,11 @@ def _ensure_distance_follow_controller():
     return _distance_follow
 
 
+_distance_sensor_lock = threading.Lock()
+_distance_info = None
+_distance_sensor_active = False
+
+
 def autopilot_publish_event(event, origin: str = None):
     cli = client_autopilot
     if cli is None:
@@ -978,11 +985,33 @@ def autopilot_on_message(cli, userdata, message):
             )
             return
         follow_controller.start(origin=origin, config=cfg)
+        # Configura y arranca la lectura del sensor de distancia cuando se inicia el seguimiento.
+        global _distance_sensor_active
+        if not _distance_sensor_active:
+            dron.ConfigureDistanceSensor('TFmini')
+
+            def _update_distance_info(distance_info):
+                global _distance_info
+                with _distance_sensor_lock:
+                    _distance_info = distance_info
+                print(f"[AUTOPILOT] Distance sensor info: {distance_info}")
+                cli = client_autopilot
+                if cli is not None:
+                    try:
+                        payload = json.dumps(distance_info) if isinstance(distance_info, dict) else json.dumps({"data": str(distance_info)})
+                        cli.publish(T_DISTANCE_INFO, payload)
+                    except Exception as e:
+                        print(f"[AUTOPILOT] Error publicando distancia MQTT: {e}")
+                return distance_info
+
+            dron.send_distance_sensor_info(_update_distance_info, freq=10)
+            _distance_sensor_active = True
         _autopilot_publish_status(
             "Seguimiento por distancia activado",
             origin=origin,
             mode="distance-follow",
             config=follow_controller.snapshot_config(),
+            distance=_distance_info,
         )
 
     elif command == 'updateDistanceFollow':
@@ -1022,6 +1051,9 @@ def autopilot_on_message(cli, userdata, message):
         except Exception:
             pass
         follow_controller.stop(reason=reason, origin=origin)
+        if _distance_sensor_active:
+            dron.stop_sending_distance_sensor_info()
+            _distance_sensor_active = False
         _autopilot_publish_status(
             "Seguimiento por distancia detenido",
             origin=origin,
@@ -2213,7 +2245,7 @@ def start_webrtc_dashboard():
 def on_mqtt_message_dashboard(cli, userdata, msg):
     global _connect_attempt_token
     global _dashboard_telem_source, _dashboard_telem_source_last_ts, _dashboard_telem_source_last_log
-    global _dashboard_last_telem_rx_ts
+    global _dashboard_last_telem_rx_ts, _distance_info
     topic = msg.topic
 
     if topic == f'autopilotServiceDemo/{MY_ORIGIN}/telemetryInfo':
@@ -2336,6 +2368,14 @@ def on_mqtt_message_dashboard(cli, userdata, msg):
         _ui_call(arm_takeOffBtn.configure, text='Despegar', fg='black', bg='dark orange')
         _ui_call(landBtn.configure, text='Aterrizar', fg='black', bg='dark orange')
 
+    elif topic == T_DISTANCE_INFO:
+        try:
+            data = json.loads(msg.payload)
+            with _distance_sensor_lock:
+                _distance_info = data
+        except Exception as e:
+            print(f"[DASHBOARD] Error procesando distanceSensorInfo: {e}")
+
 
 # ── Lista de marcadores de crimen en el mapa ──────────────────────────────────
 # §WEBRTC_CRIMEN ── alertas de crimen y popup de clip ─────────────────────────
@@ -2420,27 +2460,33 @@ def _reproducir_clip_en_popup(crime_id: str, clip_path: str, score: float):
     btn_f = tk.Frame(popup, bg="#212121")
     btn_f.pack(fill="x", padx=20, pady=8)
 
-    def _confirmar():
-        _actualizar_confirmacion(crime_id, 1)
-        status_lbl.config(text="✓ Confirmado como crimen", fg="#4caf50")
-        cb.config(state="disabled"); db.config(state="disabled")
+    if IS_GROUND_STATION:
+        def _confirmar():
+            _actualizar_confirmacion(crime_id, 1)
+            status_lbl.config(text="✓ Confirmado como crimen", fg="#4caf50")
+            cb.config(state="disabled"); db.config(state="disabled")
 
-    def _descartar():
-        _actualizar_confirmacion(crime_id, 0)
-        status_lbl.config(text="✗ Marcado como falso positivo", fg="#aaaaaa")
-        cb.config(state="disabled"); db.config(state="disabled")
+        def _descartar():
+            _actualizar_confirmacion(crime_id, 0)
+            status_lbl.config(text="✗ Marcado como falso positivo", fg="#aaaaaa")
+            cb.config(state="disabled"); db.config(state="disabled")
 
-    cb = tk.Button(btn_f, text="✓ Confirmar crimen",
-                   font=("Arial", 10, "bold"), bg="#e94560", fg="white",
-                   relief="flat", padx=16, pady=8, cursor="hand2",
-                   command=_confirmar)
-    cb.pack(side="left", expand=True, fill="x", padx=4)
+        cb = tk.Button(btn_f, text="✓ Confirmar crimen",
+                       font=("Arial", 10, "bold"), bg="#e94560", fg="white",
+                       relief="flat", padx=16, pady=8, cursor="hand2",
+                       command=_confirmar)
+        cb.pack(side="left", expand=True, fill="x", padx=4)
 
-    db = tk.Button(btn_f, text="✗ Falso positivo",
-                   font=("Arial", 10, "bold"), bg="#424242", fg="white",
-                   relief="flat", padx=16, pady=8, cursor="hand2",
-                   command=_descartar)
-    db.pack(side="right", expand=True, fill="x", padx=4)
+        db = tk.Button(btn_f, text="✗ Falso positivo",
+                       font=("Arial", 10, "bold"), bg="#424242", fg="white",
+                       relief="flat", padx=16, pady=8, cursor="hand2",
+                       command=_descartar)
+        db.pack(side="right", expand=True, fill="x", padx=4)
+    else:
+        tk.Label(btn_f,
+                 text="👁  Solo observación — el veredicto lo emite la Estación de Tierra",
+                 font=("Arial", 9, "italic"), bg="#212121", fg="#777777",
+                 pady=8).pack(expand=True)
 
     def _play():
         cap = cv2.VideoCapture(clip_path)
@@ -3235,6 +3281,7 @@ def crear_ventana(modo):
         client_dashboard.subscribe(T_CRIME_CHUNK)
         client_dashboard.subscribe(f'{T_CRIME_CHUNK}/start')
         client_dashboard.subscribe(f'{T_CRIME_CHUNK}/end')
+        client_dashboard.subscribe(T_DISTANCE_INFO)
         client_dashboard.reconnect_delay_set(min_delay=1, max_delay=30)
         client_dashboard.loop_start()
         _start_telemetry_watchdog_global()
